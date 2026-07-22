@@ -25,6 +25,14 @@ KICKOFF = (
     "着手可能なタスクがなくなるまで繰り返し、状況を報告して終えること。"
 )
 
+# out-of-the-box the agents can edit their own worktree and run the
+# coordination commands, nothing broader; set agent_flags in zeliji.toml
+# (e.g. --dangerously-skip-permissions) for full autonomy
+DEFAULT_FLAGS = [
+    "--permission-mode", "acceptEdits",
+    "--allowedTools", "Bash(zeliji:*)", "Bash(python -m zeliji:*)", "Bash(git:*)",
+]
+
 
 def _summarize_tool(name: str, inp: dict) -> str:
     detail = inp.get("command") or inp.get("file_path") or inp.get("pattern") or ""
@@ -90,6 +98,9 @@ class Agent(threading.Thread):
             cmd += ["--resume", self.session_id]
         if self.model:
             cmd += ["--model", self.model]
+        # the shared bus lives in the main checkout, outside this worktree —
+        # without this the agent cannot even read the task board
+        cmd += ["--add-dir", str(self.home.parent.resolve())]
         cmd += self.flags
         env = os.environ | {
             "ZELIJI_HOME": str(self.home.resolve()),
@@ -141,7 +152,7 @@ def spawn_team(cfg: dict, home: Path, worktrees: dict[str, Path]) -> list[Agent]
             charter=home / "roles" / f"{name}.md",
             home=home,
             model=role.get("model") or project.get("model"),
-            flags=list(project.get("agent_flags", ["--permission-mode", "acceptEdits"])),
+            flags=list(project.get("agent_flags", DEFAULT_FLAGS)),
         )
         agent.start()
         agent.instruct(project.get("kickoff", KICKOFF))
