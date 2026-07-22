@@ -74,7 +74,8 @@ def load_config(root: Path) -> dict:
     f = root / CONFIG_NAME
     if not f.exists():
         raise TeamError(f"{CONFIG_NAME} not found in {root} — run `zeliji init`")
-    cfg = tomllib.loads(f.read_text(encoding="utf-8"))
+    # utf-8-sig: Windows Notepad may save with a BOM, which tomllib rejects
+    cfg = tomllib.loads(f.read_text(encoding="utf-8-sig"))
     roles = cfg.get("role", [])
     if not roles:
         raise TeamError(f"{CONFIG_NAME} defines no [[role]] entries")
