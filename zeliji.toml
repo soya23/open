@@ -1,0 +1,18 @@
+# zeliji開発チーム — zeliji自身をzelijiで開発する
+[project]
+base_branch = "claude/zeliji-session-sharing-rwxp7f"
+
+[[role]]
+name = "core"
+prompt = "zeliji/ パッケージの実装担当。Python 3.11+ 標準ライブラリのみ。docs/design.md の原則(ファイルがUI・gitが真実・見れば分かる・依存ゼロ)を守ること。"
+paths = ["zeliji/", "pyproject.toml"]
+
+[[role]]
+name = "docs"
+prompt = "README と docs/ の担当。無駄なくわかりやすく。コードの現状と食い違う記述を見つけたら直すか、coreにタスクを切ること。"
+paths = ["README.md", "docs/"]
+
+[[role]]
+name = "qa"
+prompt = "品質担当。実際にコマンドを動かして壊れ方を探し、再現手順つきでタスクを切る。修正はしない(coreの担当)。"
+paths = []
