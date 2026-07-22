@@ -65,6 +65,11 @@ def cmd_up(args: argparse.Namespace) -> int:
     if shutil.which("claude") is None:
         print("claude CLI not found on PATH — install Claude Code first", file=sys.stderr)
         return 1
+    try:
+        import curses  # noqa: F401
+    except ImportError:
+        print("curses missing — on Windows run: pip install windows-curses", file=sys.stderr)
+        return 1
     from . import cockpit
 
     cockpit.run(cfg, home, root)

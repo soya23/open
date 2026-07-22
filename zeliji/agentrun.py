@@ -78,8 +78,11 @@ class Agent(threading.Thread):
     def _turn(self, prompt: str) -> None:
         self.state = RUNNING
         self.events.append(("you", prompt))
+        import shutil
+
+        claude = shutil.which("claude") or "claude"  # windows needs claude.cmd resolved
         cmd = [
-            "claude", "-p", prompt,
+            claude, "-p", prompt,
             "--output-format", "stream-json", "--verbose",
             "--append-system-prompt", self.charter.read_text(),
         ]

@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "zellij evolved: role-based Claude Code sessions with a shared task board, messaging, and git-worktree isolation"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+dependencies = [
+    "windows-curses; sys_platform == 'win32'",
+]
 
 [project.scripts]
 zeliji = "zeliji.cli:main"

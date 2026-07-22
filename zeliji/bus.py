@@ -8,12 +8,30 @@ sessions never corrupt state.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+try:  # unix
+    import fcntl
+
+    def _lock(fh):
+        fcntl.flock(fh, fcntl.LOCK_EX)
+
+    def _unlock(fh):
+        fcntl.flock(fh, fcntl.LOCK_UN)
+except ImportError:  # windows
+    import msvcrt
+
+    def _lock(fh):
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+
+    def _unlock(fh):
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
 HOME_ENV = "ZELIJI_HOME"
 LINK_FILE = ".zeliji-link"
@@ -63,12 +81,15 @@ def bus_dir(home: Path) -> Path:
 @contextmanager
 def locked(home: Path):
     lock = bus_dir(home) / "lock"
-    with open(lock, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+    with open(lock, "a+") as fh:
+        if fh.seek(0, 2) == 0:  # windows locks need at least one byte
+            fh.write(".")
+            fh.flush()
+        _lock(fh)
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            _unlock(fh)
 
 
 def _tasks_file(home: Path) -> Path:
