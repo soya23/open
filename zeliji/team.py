@@ -112,11 +112,10 @@ def role_toml(role: dict) -> str:
 
 
 def write_config(root: Path, base_branch: str, roles: list[dict],
-                 autonomous: bool = False) -> Path:
+                 mode: str = "pair") -> Path:
     parts = ["# zeliji team — `zeliji up` で起動\n[project]\n"
-             f"base_branch = {_toml_str(base_branch)}\n"]
-    if autonomous:
-        parts.append('agent_flags = ["--dangerously-skip-permissions"]\n')
+             f"base_branch = {_toml_str(base_branch)}\n"
+             f"mode = {_toml_str(mode)}  # mirror=提案のみ / pair=協調(既定) / rogue=全自動\n"]
     for r in roles:
         parts.append("\n" + role_toml(r))
     f = root / CONFIG_NAME

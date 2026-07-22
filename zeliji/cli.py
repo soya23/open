@@ -94,12 +94,15 @@ def wizard(root: Path) -> Path | None:
     choice = _ask("  [1]: ", "1")
     roles = TEMPLATES.get(choice, TEMPLATES["1"])[1]
 
-    auto = _ask("\nエージェントに確認なしで自由に作業させますか?\n"
-                "  (y = 全自動で速いが、信頼できる作業場でのみ推奨 / N = 安全な既定)  [y/N]: ").lower() == "y"
+    print("\nエージェントにどこまで任せますか?")
+    print("  1) pair   — ファイル編集と協調コマンドだけ許可 (安全な既定)")
+    print("  2) mirror — 読むだけ。提案とレビューのみで何も変更しない")
+    print("  3) rogue  — 全自動。速いが、信頼できる作業場でのみ推奨")
+    mode = {"1": "pair", "2": "mirror", "3": "rogue"}.get(_ask("  [1]: ", "1"), "pair")
 
     branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root,
                             capture_output=True, encoding="utf-8").stdout.strip() or "main"
-    team.write_config(root, branch, roles, autonomous=auto)
+    team.write_config(root, branch, roles, mode=mode)
     gitignore = root / ".gitignore"
     lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
     if bus.DIR_NAME + "/" not in lines:

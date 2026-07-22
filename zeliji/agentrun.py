@@ -37,6 +37,22 @@ DEFAULT_FLAGS = [
     "--allowedTools", "Bash(zeliji:*)", "Bash(python -m zeliji:*)", "Bash(git:*)",
 ]
 
+# wemux (2012) proved collaboration needs permission tiers and died proving
+# they can't be bolted on later — so they live in the core: mirror/pair/rogue
+MODES = {
+    "mirror": ["--permission-mode", "plan",
+               "--allowedTools", "Bash(zeliji:*)", "Bash(python -m zeliji:*)"],
+    "pair": DEFAULT_FLAGS,
+    "rogue": ["--dangerously-skip-permissions"],
+}
+
+
+def flags_for(project: dict) -> list[str]:
+    explicit = project.get("agent_flags")
+    if explicit:
+        return list(explicit)
+    return list(MODES.get(project.get("mode", "pair"), DEFAULT_FLAGS))
+
 
 def _summarize_tool(name: str, inp: dict) -> str:
     detail = inp.get("command") or inp.get("file_path") or inp.get("pattern") or ""
@@ -207,7 +223,7 @@ def spawn_team(cfg: dict, home: Path, worktrees: dict[str, Path]) -> list[Agent]
             charter=home / "roles" / f"{name}.md",
             home=home,
             model=role.get("model") or project.get("model"),
-            flags=list(project.get("agent_flags", DEFAULT_FLAGS)),
+            flags=flags_for(project),
         )
         agent.start()
         default_kickoff = KICKOFF_RESUME if agent.resumed else KICKOFF

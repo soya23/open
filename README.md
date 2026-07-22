@@ -20,7 +20,8 @@
 
 なぜ端末エミュレーションを捨てたかは [docs/evolution.md](docs/evolution.md)、
 競合との位置づけは [docs/competitors.md](docs/competitors.md)、
-設計原則は [docs/design.md](docs/design.md)、改善50案と精査は
+設計原則は [docs/design.md](docs/design.md)、40年の系譜から学んだ教訓は
+[docs/lineage.md](docs/lineage.md)、改善50案と精査は
 [docs/ideas.md](docs/ideas.md)、セキュリティは [SECURITY.md](SECURITY.md)。
 
 ## zellij と比べて
@@ -98,10 +99,18 @@ paths = ["server/"]
 薄い1行 (生ログは `v`)。修飾キーは使わない (zellij最大の不満だったキー衝突を
 構造的に回避)。入力待ちになると端末ベルで知らせる。
 
-権限は既定で安全 (worktree内の編集と `zeliji`/`git` コマンドのみ)。
-完全自律はウィザードで明示的に選ぶか
-`agent_flags = ["--dangerously-skip-permissions"]` (信頼できるリポジトリ
-のみ。有効中は画面に ⚠AUTO が出る)。詳細は [SECURITY.md](SECURITY.md)。
+### 権限は3モード (wemuxの mirror/pair/rogue の再演)
+
+```toml
+[project]
+mode = "pair"    # 既定: worktree内の編集と zeliji/git コマンドだけ許可
+# mode = "mirror"  # 読むだけ。提案・レビューのみで何も変更しない
+# mode = "rogue"   # 全自動 (信頼できる作業場のみ。画面に ⚠AUTO が常時表示)
+```
+
+ウィザードでも選べる。詳細は [SECURITY.md](SECURITY.md)。cockpitを閉じても
+セッションは死なない — 次の `zeliji up` で各役割が**前回の記憶ごと**復帰する
+(screenのdetach/reattachのエージェント版)。
 
 ### 人間もCLIで同じバスに参加できる
 
