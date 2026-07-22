@@ -24,8 +24,8 @@ else:
     import termios
     import tty
 
-LEFT, RIGHT = "KEY_LEFT", "KEY_RIGHT"
-_WIN_KEYS = {"K": LEFT, "M": RIGHT}
+LEFT, RIGHT, UP, DOWN = "KEY_LEFT", "KEY_RIGHT", "KEY_UP", "KEY_DOWN"
+_WIN_KEYS = {"K": LEFT, "M": RIGHT, "H": UP, "P": DOWN}
 
 
 class Term:
@@ -105,10 +105,9 @@ class Term:
         while i < len(data):
             if data[i] == 0x1B and data[i + 1:i + 2] == b"[":
                 final = data[i + 2:i + 3]
-                if final == b"C":
-                    keys.append(RIGHT)
-                elif final == b"D":
-                    keys.append(LEFT)
+                arrow = {b"A": UP, b"B": DOWN, b"C": RIGHT, b"D": LEFT}.get(final)
+                if arrow:
+                    keys.append(arrow)
                 i += 3  # swallow other CSI sequences too
                 continue
             j = i + 1

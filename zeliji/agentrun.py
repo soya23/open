@@ -55,6 +55,7 @@ class Agent(threading.Thread):
         self.events: deque[tuple[str, str]] = deque(maxlen=200)
         self.prompts: queue.Queue[str | None] = queue.Queue()
         self.attention = False  # turn finished and nobody has looked yet
+        self._interrupted = False
         self.proc: subprocess.Popen | None = None
         self.log = home / "agents" / f"{role}.jsonl"
         self.log.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +69,12 @@ class Agent(threading.Thread):
     def stop(self) -> None:
         self.prompts.put(None)
         if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+    def interrupt(self) -> None:
+        """Stop the current turn only; the session stays resumable."""
+        if self.state == RUNNING and self.proc and self.proc.poll() is None:
+            self._interrupted = True
             self.proc.terminate()
 
     # ------------------------------------------------------------ loop
@@ -118,7 +125,11 @@ class Agent(threading.Thread):
                 except json.JSONDecodeError:
                     continue
         code = self.proc.wait()
-        if code != 0 and self.state != WAITING:
+        if self._interrupted:
+            self._interrupted = False
+            self.state = WAITING
+            self.events.append(("error", "⏹ 中断しました — Enter で次の指示を"))
+        elif code != 0 and self.state != WAITING:
             self.state = ERROR
             self.events.append(("error", f"claude exited with {code}"))
         else:
