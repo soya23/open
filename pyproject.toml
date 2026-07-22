@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zeliji"
+version = "0.1.0"
+description = "zellij evolved: role-based Claude Code sessions with a shared task board, messaging, and git-worktree isolation"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.scripts]
+zeliji = "zeliji.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zeliji*"]

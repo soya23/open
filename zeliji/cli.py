@@ -1,0 +1,196 @@
+"""zeliji command line interface."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from . import bus, layout, team
+
+
+def _home() -> Path:
+    return bus.find_home()
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    root = Path.cwd()
+    if not (root / ".git").exists():
+        print("zeliji init must run at the root of a git repository", file=sys.stderr)
+        return 1
+    cfg = root / team.CONFIG_NAME
+    if cfg.exists():
+        print(f"{team.CONFIG_NAME} already exists — edit it to define your roles")
+    else:
+        cfg.write_text(team.SAMPLE_CONFIG)
+        print(f"wrote {team.CONFIG_NAME} — edit the roles, then run `zeliji up`")
+    (root / bus.DIR_NAME).mkdir(exist_ok=True)
+    gitignore = root / ".gitignore"
+    lines = gitignore.read_text().splitlines() if gitignore.exists() else []
+    if bus.DIR_NAME + "/" not in lines:
+        gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n")
+        print("added .zeliji/ to .gitignore")
+    return 0
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    root = Path.cwd()
+    cfg = team.load_config(root)
+    home = root / bus.DIR_NAME
+    home.mkdir(exist_ok=True)
+    base = cfg.get("project", {}).get("base_branch", "main")
+
+    for role in cfg["role"]:
+        wt = team.ensure_worktree(root, home, role["name"], base)
+        team.write_charter(home, role)
+        print(f"role {role['name']}: worktree {wt} (branch {team.branch_for(role['name'])})")
+
+    kdl = layout.write(cfg, home)
+    print(f"layout: {kdl}")
+
+    if args.dry_run:
+        return 0
+    if shutil.which("zellij") is None:
+        print(
+            "\nzellij not found on PATH — start it yourself with:\n"
+            f"  zellij --layout {kdl}",
+            file=sys.stderr,
+        )
+        return 1
+    os.execvp("zellij", ["zellij", "--layout", str(kdl)])
+
+
+def cmd_task(args: argparse.Namespace) -> int:
+    home = _home()
+    if args.task_cmd == "add":
+        t = bus.task_add(home, args.title, args.role)
+        print(f"added #{t['id']}: {t['title']}" + (f" @{t['role']}" if t["role"] else ""))
+    elif args.task_cmd == "list":
+        for t in bus.task_list(home, args.status):
+            who = f" @{t['role']}" if t.get("role") else ""
+            print(f"[{t['status']:5}] #{t['id']} {t['title']}{who}")
+    elif args.task_cmd == "claim":
+        t = bus.task_claim(home, args.id, args.role)
+        print(f"claimed #{t['id']} as {t['role']}")
+    elif args.task_cmd == "done":
+        t = bus.task_done(home, args.id)
+        print(f"done #{t['id']}: {t['title']}")
+    return 0
+
+
+def cmd_say(args: argparse.Namespace) -> int:
+    bus.say(_home(), args.to, args.text)
+    print(f"→ {args.to}: {args.text}")
+    return 0
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    role = args.role or os.environ.get("ZELIJI_ROLE")
+    if not role:
+        print("no role — pass --role or set ZELIJI_ROLE", file=sys.stderr)
+        return 1
+    fresh = bus.inbox(_home(), role)
+    if not fresh:
+        print("(no new messages)")
+    for m in fresh:
+        print(f"{m['ts']} {m['from']} → {m['to']}: {m['text']}")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    home = _home()
+    root = home.parent
+    cfg = team.load_config(root)
+    for role in cfg["role"]:
+        wt = team.worktree_path(home, role["name"])
+        if not wt.is_dir():
+            print(f"{role['name']:12} (no worktree — run `zeliji up`)")
+            continue
+        res = subprocess.run(
+            ["git", "-C", str(wt), "status", "--porcelain"],
+            capture_output=True, text=True,
+        )
+        dirty = len([ln for ln in res.stdout.splitlines() if ln.strip()])
+        state = f"{dirty} uncommitted change(s)" if dirty else "clean"
+        print(f"{role['name']:12} {team.branch_for(role['name']):24} {state}")
+    warnings = team.overlap_report(root, cfg)
+    if warnings:
+        print()
+        for w in warnings:
+            print(w)
+    else:
+        print("\nno cross-role file overlaps ✔")
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    from . import watch
+
+    home = _home()
+    watch.run(home, interval=args.interval)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="zeliji",
+        description="zellij evolved — role-based Claude sessions with shared state",
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init", help="create zeliji.toml and the shared bus")
+
+    up = sub.add_parser("up", help="create worktrees + charters, launch zellij")
+    up.add_argument("--dry-run", action="store_true", help="prepare everything but do not launch zellij")
+
+    task = sub.add_parser("task", help="shared task board")
+    tsub = task.add_subparsers(dest="task_cmd", required=True)
+    t_add = tsub.add_parser("add")
+    t_add.add_argument("title")
+    t_add.add_argument("--role", help="assign to a role")
+    t_list = tsub.add_parser("list")
+    t_list.add_argument("--status", choices=["todo", "doing", "done"])
+    t_claim = tsub.add_parser("claim")
+    t_claim.add_argument("id", type=int)
+    t_claim.add_argument("--role")
+    t_done = tsub.add_parser("done")
+    t_done.add_argument("id", type=int)
+
+    say = sub.add_parser("say", help="message a role, or `all`")
+    say.add_argument("to")
+    say.add_argument("text")
+
+    inbox = sub.add_parser("inbox", help="read unread messages for your role")
+    inbox.add_argument("--role")
+
+    sub.add_parser("status", help="worktree states and conflict watch")
+
+    watch = sub.add_parser("watch", help="live dashboard (used by the layout)")
+    watch.add_argument("--interval", type=float, default=2.0)
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    handlers = {
+        "init": cmd_init,
+        "up": cmd_up,
+        "task": cmd_task,
+        "say": cmd_say,
+        "inbox": cmd_inbox,
+        "status": cmd_status,
+        "watch": cmd_watch,
+    }
+    try:
+        return handlers[args.cmd](args)
+    except (bus.BusError, team.TeamError) as e:
+        print(f"zeliji: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
