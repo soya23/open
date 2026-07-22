@@ -1,44 +1,48 @@
 # zeliji
 
-**zellij evolved** — zellij は画面を分割してくれるが、ペイン同士は互いを知らない。
-zeliji はそこに「チーム」を足す: 役割ごとの Claude Code セッションを
-git worktree で隔離しつつ、共有タスクボードとメッセージングで繋ぐ。
+**エージェント時代の多重化ツール。** zellij がターミナルを多重化した
+ように、zeliji は **エージェントを多重化**する — zellij 本体はもう不要。
+
+ペインの中身は生のターミナルではなく、役割を持った Claude セッション。
+各役割は git worktree で隔離され、共有タスクボードとメッセージングで
+協調し、自前の cockpit (curses、依存ゼロ) に構造化イベントが流れる。
 
 ```
-┌──────────────┬──────────────┬──────────────┐
-│  frontend    │  backend     │  reviewer    │   ← 各ペイン = claude
-│  (worktree)  │  (worktree)  │  (worktree)  │      役割チャーター入り
-├──────────────┴──────────────┴──────────────┤
-│  zeliji watch — タスクボード / メッセージ / コンフリクト監視  │
-└─────────────────────────────────────────────┘
+┌ backend ● RUN ────────────┬ frontend ○ WAIT ! ───────┐
+│ » シフト開始…             │ ⚒ Bash zeliji inbox      │
+│ ⚒ Bash zeliji task claim 1│ ✔ done: cli.py 実装済み  │
+│ ⚒ Write server/greeting.py│   (指示待ち)             │
+├───────────────────────────┴──────────────────────────┤
+│ Tasks: 1 todo · 1 doing (#2 画面実装@frontend) · 1 done│
+│ Tab focus · Enter instruct · g nudge · n task · q quit │
+└──────────────────────────────────────────────────────┘
 ```
 
-## zellij との違い
+なぜ端末エミュレーションを捨てたかは [docs/evolution.md](docs/evolution.md)、
+競合との位置づけは [docs/competitors.md](docs/competitors.md)、
+設計原則は [docs/design.md](docs/design.md)。
 
-| | zellij 単体 | zeliji |
+## zellij と比べて
+
+| | zellij + 手動並列 | zeliji |
 |---|---|---|
-| 画面分割 | ✅ | ✅ (zellij をそのまま利用) |
-| セッション間のタスク共有 | ❌ | ✅ 共有タスクボード (claim で取り合い防止、`--after` で依存関係) |
-| セッション間メッセージ | ❌ | ✅ `zeliji say` / `zeliji inbox` |
-| 編集コンフリクト | 💥 同一ツリーで衝突 | ✅ 役割ごとに git worktree で完全隔離 |
-| コンフリクトの予兆検知 | ❌ | ✅ ブランチ間の同一ファイル編集を警告 |
-| 役割の定義 | 手動で毎回 | ✅ `zeliji.toml` に宣言、システムプロンプトに自動注入 |
-| 成果の回収 | ❌ 手動 merge | ✅ `zeliji merge --cleanup` で収穫から掃除まで1コマンド |
+| ペインの単位 | 生のターミナル | **エージェント** (構造化イベントの流れ) |
+| セッション間のタスク共有 | ❌ | ✅ 共有ボード (claim で取り合い防止、`--after` で依存) |
+| セッション間メッセージ | ❌ | ✅ `say` / `inbox` |
+| 編集コンフリクト | 💥 | ✅ 役割ごとに worktree 隔離 + 同一ファイル編集の警告 |
+| 入力待ちの検知 | プラグインが必要 | ✅ `!` バッジ内蔵 |
+| 成果の回収 | 手動 merge | ✅ `zeliji merge --cleanup` |
+| キーヒント常時表示 | ✅ (ここから奪った) | ✅ |
+| 端末エミュレーション | あり (重さの根源) | **なし** |
 
-類似ツール (claude-squad, vibe-kanban, 公式 Agent Teams 等) との比較は
-[docs/competitors.md](docs/competitors.md)、設計原則は
-[docs/design.md](docs/design.md) を参照。要点: **worktree 隔離と
-セッション間協調を両方持つ軽量 CLI は空白地帯**で、ボードがプレーン
-ファイルなので人間もどのエージェント (Claude/Codex/Gemini) も同じ規約で
-参加できる。
-
-## インストール
+## インストールと前提
 
 ```bash
-pip install -e .   # このリポジトリで。依存は Python 3.11+ 標準ライブラリのみ
+pip install -e .   # Python 3.11+、依存は標準ライブラリのみ
 ```
 
-前提: `git`, `claude` (Claude Code CLI), `zellij`
+前提: `git`, `claude` (Claude Code CLI)。zellij は不要 (レガシーブリッジ
+`--zellij` を使う時だけ)。
 
 ## 使い方
 
@@ -46,7 +50,7 @@ pip install -e .   # このリポジトリで。依存は Python 3.11+ 標準ラ
 cd your-repo
 zeliji init          # zeliji.toml の雛形を生成
 $EDITOR zeliji.toml  # 役割・担当パス・ブリーフを書く
-zeliji up            # worktree 作成 → 役割充填済み zellij が起動
+zeliji up            # worktree準備 → cockpit起動、全役割が自動でシフト開始
 ```
 
 `zeliji.toml`:
@@ -54,8 +58,11 @@ zeliji up            # worktree 作成 → 役割充填済み zellij が起動
 ```toml
 [project]
 base_branch = "main"
-include = [".env"]        # gitignore済みでも各worktreeへコピー
-setup = "npm install"     # worktree作成時に1回実行
+include = [".env"]         # gitignore済みでも各worktreeへコピー
+setup = "npm install"      # worktree作成時に1回実行
+# model = "sonnet"         # 全役割のモデル (役割ごとに上書き可)
+# agent_flags = ["--permission-mode", "acceptEdits"]  # 既定値
+# kickoff = "..."          # シフト開始プロンプトの上書き
 
 [[role]]
 name = "frontend"
@@ -68,43 +75,47 @@ prompt = "You own the API and data layer. Keep endpoints tested."
 paths = ["server/"]
 ```
 
-`zeliji up` がやること:
+### cockpit の操作
 
-1. 役割ごとに `.zeliji/worktrees/<role>` へ worktree を作成 (ブランチ `zeliji/<role>`)
-2. 役割チャーター (役割・担当ファイル・チーム連携コマンドの説明) を生成し、
-   `claude --append-system-prompt` で各セッションに注入
-3. zellij レイアウトを生成して起動。下段には `zeliji watch` ダッシュボード
+- `Tab` / `←→` — 役割にフォーカス (入力待ち `!` が消える)
+- `Enter` — フォーカス中のエージェントに次の指示 (同一セッション継続)
+- `g` — 待機中の全員に「ボードを再確認して続けて」
+- `n` — タスク追加 / `s` — メッセージ送信 (`frontend こんにちは` / `all ...`)
+- `q` — 終了
 
-## チーム連携 (各 Claude セッションが Bash で叩く)
+エージェントは各自の worktree 内で、役割チャーターをシステムプロンプトに
+注入された状態で動く。完全自律で走らせたい場合は
+`agent_flags = ["--dangerously-skip-permissions"]` (信頼できるリポジトリのみ)。
+
+### 人間もCLIで同じバスに参加できる
 
 ```bash
 zeliji task add "ログインAPIを実装" --role backend
 zeliji task add "ログイン画面" --after 1   # #1が終わるまでclaim不可
 zeliji task list
-zeliji task claim 3        # 二重着手・依存未完了はエラーになる
-zeliji task done 3
-zeliji say frontend "APIのスキーマ変えたよ、/docs見て"
-zeliji say all "mainをrebaseして"
-zeliji inbox               # 自分宛て・全体宛ての未読
-zeliji status              # 進捗(コミット数/変更ファイル数) + 同一ファイル編集の警告
+zeliji say frontend "APIのスキーマ変えたよ"
+zeliji status        # 進捗 + 同一ファイル編集の警告
 ```
 
-状態はすべて `.zeliji/bus/` のファイル (flock で排他) にあるので、
-人間もペイン外から同じコマンドで参加できる。
+状態は全部 `.zeliji/bus/` のプレーンファイル (flock で排他)。エージェントも
+人間も、なんなら Codex や Gemini でも、同じ規約で参加できる。
 
 ## マージ (収穫)
 
-各役割は自分のブランチ `zeliji/<role>` にコミットする。回収は1コマンド:
-
 ```bash
-zeliji merge                    # 全役割のブランチをbaseへ (コミットのある役割のみ)
-zeliji merge frontend           # 特定の役割だけ
-zeliji merge --cleanup          # マージ後にworktreeとブランチも削除
+zeliji merge                # 全役割のブランチを base へ
+zeliji merge --cleanup      # マージ後に worktree とブランチも削除
 ```
 
-同一ファイルを複数役割が触った時点で `zeliji status` とダッシュボードが
-警告するので、マージ前に気づける。コンフリクトしたら安全に abort して
-手動解決を案内する。普通の `git merge zeliji/<role>` も当然使える。
+コンフリクトしたら安全に abort して手動解決を案内する。
+
+## レガシーブリッジ
+
+生の対話ターミナルをどうしても触りたいとき:
+
+```bash
+zeliji up --zellij   # 従来どおり KDL レイアウトを生成して zellij で起動
+```
 
 ## ライセンス
 

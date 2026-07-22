@@ -48,20 +48,27 @@ def cmd_up(args: argparse.Namespace) -> int:
         team.write_charter(home, role)
         print(f"role {role['name']}: worktree {wt} (branch {team.branch_for(role['name'])})")
 
-    kdl = layout.write(cfg, home)
-    print(f"layout: {kdl}")
+    if args.zellij:
+        kdl = layout.write(cfg, home)
+        print(f"layout: {kdl}")
+        if args.dry_run:
+            print(f"\nnext: `zellij --layout {kdl}`")
+            return 0
+        if shutil.which("zellij") is None:
+            print(f"\nzellij not found on PATH — run: zellij --layout {kdl}", file=sys.stderr)
+            return 1
+        os.execvp("zellij", ["zellij", "--layout", str(kdl)])
 
     if args.dry_run:
-        print("\nnext: `zellij --layout .zeliji/layout.kdl`, or rerun without --dry-run")
+        print("\nnext: rerun without --dry-run to open the cockpit")
         return 0
-    if shutil.which("zellij") is None:
-        print(
-            "\nzellij not found on PATH — start it yourself with:\n"
-            f"  zellij --layout {kdl}",
-            file=sys.stderr,
-        )
+    if shutil.which("claude") is None:
+        print("claude CLI not found on PATH — install Claude Code first", file=sys.stderr)
         return 1
-    os.execvp("zellij", ["zellij", "--layout", str(kdl)])
+    from . import cockpit
+
+    cockpit.run(cfg, home, root)
+    return 0
 
 
 def cmd_task(args: argparse.Namespace) -> int:
@@ -175,8 +182,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init", help="create zeliji.toml and the shared bus")
 
-    up = sub.add_parser("up", help="create worktrees + charters, launch zellij")
-    up.add_argument("--dry-run", action="store_true", help="prepare everything but do not launch zellij")
+    up = sub.add_parser("up", help="create worktrees + charters, open the cockpit")
+    up.add_argument("--dry-run", action="store_true", help="prepare everything but do not launch")
+    up.add_argument("--zellij", action="store_true",
+                    help="legacy bridge: raw claude terminals in a zellij layout instead of the cockpit")
 
     task = sub.add_parser("task", help="shared task board")
     tsub = task.add_subparsers(dest="task_cmd", required=True)
