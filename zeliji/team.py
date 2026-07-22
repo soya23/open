@@ -74,7 +74,7 @@ def load_config(root: Path) -> dict:
     f = root / CONFIG_NAME
     if not f.exists():
         raise TeamError(f"{CONFIG_NAME} not found in {root} — run `zeliji init`")
-    cfg = tomllib.loads(f.read_text())
+    cfg = tomllib.loads(f.read_text(encoding="utf-8"))
     roles = cfg.get("role", [])
     if not roles:
         raise TeamError(f"{CONFIG_NAME} defines no [[role]] entries")
@@ -86,7 +86,7 @@ def load_config(root: Path) -> dict:
 
 def _git(root: Path, *args: str) -> str:
     res = subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True
+        ["git", "-C", str(root), *args], capture_output=True, encoding="utf-8", errors="replace"
     )
     if res.returncode != 0:
         raise TeamError(f"git {' '.join(args)}: {res.stderr.strip()}")
@@ -115,7 +115,7 @@ def ensure_worktree(root: Path, home: Path, role: str, cfg: dict) -> Path:
     else:
         _git(root, "worktree", "add", "-b", branch, str(path), base)
     # pointer back to the shared bus, so `zeliji` works from inside
-    (path / bus.LINK_FILE).write_text(str(home.resolve()) + "\n")
+    (path / bus.LINK_FILE).write_text(str(home.resolve()) + "\n", encoding="utf-8")
     _ensure_ignored(path, bus.LINK_FILE)
     for rel in project.get("include", []):
         src = root / rel
@@ -125,7 +125,7 @@ def ensure_worktree(root: Path, home: Path, role: str, cfg: dict) -> Path:
             shutil.copy2(src, dst)
     setup = project.get("setup")
     if setup:
-        res = subprocess.run(setup, shell=True, cwd=path, capture_output=True, text=True)
+        res = subprocess.run(setup, shell=True, cwd=path, capture_output=True, encoding="utf-8", errors="replace")
         if res.returncode != 0:
             raise TeamError(f"setup failed in {path}: {res.stderr.strip()[-500:]}")
     return path
@@ -138,9 +138,9 @@ def _ensure_ignored(worktree: Path, pattern: str) -> None:
     info = common / "info"
     info.mkdir(parents=True, exist_ok=True)
     ex = info / "exclude"
-    lines = ex.read_text().splitlines() if ex.exists() else []
+    lines = ex.read_text(encoding="utf-8").splitlines() if ex.exists() else []
     if pattern not in lines:
-        ex.write_text("\n".join([*lines, pattern]) + "\n")
+        ex.write_text("\n".join([*lines, pattern]) + "\n", encoding="utf-8")
 
 
 def write_charter(home: Path, role: dict) -> Path:
@@ -159,7 +159,7 @@ def write_charter(home: Path, role: dict) -> Path:
         paths_section=paths_section,
     )
     f = roles_dir / f"{role['name']}.md"
-    f.write_text(charter)
+    f.write_text(charter, encoding="utf-8")
     return f
 
 

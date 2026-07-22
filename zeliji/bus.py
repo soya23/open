@@ -61,7 +61,7 @@ def find_home(start: Path | None = None) -> Path:
     for p in [cur, *cur.parents]:
         link = p / LINK_FILE
         if link.is_file():
-            target = Path(link.read_text().strip()).expanduser()
+            target = Path(link.read_text(encoding="utf-8").strip()).expanduser()
             if target.is_dir():
                 return target
         cand = p / DIR_NAME
@@ -104,12 +104,12 @@ def _load_tasks(home: Path) -> list[dict]:
     f = _tasks_file(home)
     if not f.exists():
         return []
-    return json.loads(f.read_text() or "[]")
+    return json.loads(f.read_text(encoding="utf-8") or "[]")
 
 
 def _save_tasks(home: Path, tasks: list[dict]) -> None:
     tmp = _tasks_file(home).with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(tasks, ensure_ascii=False, indent=2))
+    tmp.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(_tasks_file(home))
 
 
@@ -198,7 +198,7 @@ def task_done(home: Path, task_id: int) -> dict:
 def say(home: Path, to: str, text: str) -> dict:
     msg = {"ts": _now(), "from": whoami(), "to": to, "text": text}
     with locked(home):
-        with open(_messages_file(home), "a") as fh:
+        with open(_messages_file(home), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(msg, ensure_ascii=False) + "\n")
     return msg
 
@@ -208,7 +208,7 @@ def messages(home: Path, role: str | None = None, limit: int = 20) -> list[dict]
     if not f.exists():
         return []
     out = []
-    for line in f.read_text().splitlines():
+    for line in f.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         m = json.loads(line)
@@ -223,14 +223,14 @@ def inbox(home: Path, role: str) -> list[dict]:
     cursors = bus_dir(home) / "cursors"
     cursors.mkdir(exist_ok=True)
     cursor = cursors / role
-    seen = int(cursor.read_text()) if cursor.exists() else 0
+    seen = int(cursor.read_text(encoding="utf-8")) if cursor.exists() else 0
     if not f.exists():
         return []
-    lines = [ln for ln in f.read_text().splitlines() if ln.strip()]
+    lines = [ln for ln in f.read_text(encoding="utf-8").splitlines() if ln.strip()]
     fresh = []
     for ln in lines[seen:]:
         m = json.loads(ln)
         if m["to"] in ("all", role) and m["from"] != role:
             fresh.append(m)
-    cursor.write_text(str(len(lines)))
+    cursor.write_text(str(len(lines)), encoding="utf-8")
     return fresh

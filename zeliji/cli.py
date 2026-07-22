@@ -25,13 +25,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     if cfg.exists():
         print(f"{team.CONFIG_NAME} already exists — edit it to define your roles")
     else:
-        cfg.write_text(team.SAMPLE_CONFIG)
+        cfg.write_text(team.SAMPLE_CONFIG, encoding="utf-8")
         print(f"wrote {team.CONFIG_NAME} — edit the roles, then run `zeliji up`")
     (root / bus.DIR_NAME).mkdir(exist_ok=True)
     gitignore = root / ".gitignore"
-    lines = gitignore.read_text().splitlines() if gitignore.exists() else []
+    lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
     if bus.DIR_NAME + "/" not in lines:
-        gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n")
+        gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n", encoding="utf-8")
         print("added .zeliji/ to .gitignore")
     print("next: edit zeliji.toml, commit it with .gitignore, then `zeliji up`")
     return 0
@@ -133,7 +133,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             continue
         res = subprocess.run(
             ["git", "-C", str(wt), "status", "--porcelain"],
-            capture_output=True, text=True,
+            capture_output=True, encoding="utf-8", errors="replace",
         )
         dirty = len([ln for ln in res.stdout.splitlines() if ln.strip()])
         state = f"{dirty} uncommitted" if dirty else "clean"

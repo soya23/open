@@ -53,5 +53,5 @@ layout {{
 
 def write(cfg: dict, home: Path) -> Path:
     f = home / "layout.kdl"
-    f.write_text(render(cfg, home))
+    f.write_text(render(cfg, home), encoding="utf-8")
     return f

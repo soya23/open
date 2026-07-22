@@ -84,7 +84,7 @@ class Agent(threading.Thread):
         cmd = [
             claude, "-p", prompt,
             "--output-format", "stream-json", "--verbose",
-            "--append-system-prompt", self.charter.read_text(),
+            "--append-system-prompt", self.charter.read_text(encoding="utf-8"),
         ]
         if self.session_id:
             cmd += ["--resume", self.session_id]
@@ -96,10 +96,10 @@ class Agent(threading.Thread):
             "ZELIJI_ROLE": self.role,
         }
         self.proc = subprocess.Popen(
-            cmd, cwd=self.worktree, env=env, text=True,
+            cmd, cwd=self.worktree, env=env, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
-        with open(self.log, "a") as logf:
+        with open(self.log, "a", encoding="utf-8") as logf:
             for line in self.proc.stdout:
                 logf.write(line)
                 try:
