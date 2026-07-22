@@ -37,8 +37,86 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+TEMPLATES: dict[str, tuple[str, list[dict]]] = {
+    "1": ("おまかせ開発チーム (作る人+見る人)", [
+        {"name": "builder", "prompt": "実装担当。ボードのタスクを実装し、動作確認してコミットする。"},
+        {"name": "reviewer", "prompt": "レビュー担当。builderのブランチを読んで問題や改善点をタスクとして起票する。自分では修正しない。"},
+    ]),
+    "2": ("Web開発チーム", [
+        {"name": "frontend", "prompt": "UI担当。画面まわりを実装する。"},
+        {"name": "backend", "prompt": "API・データ担当。サーバ側を実装する。"},
+        {"name": "reviewer", "prompt": "レビュー担当。他の2人のブランチを確認し、問題をタスクとして起票する。"},
+    ]),
+    "3": ("文書チーム (書く人+直す人)", [
+        {"name": "writer", "prompt": "執筆担当。ボードのタスクに沿って文書を書く。"},
+        {"name": "editor", "prompt": "編集担当。writerの文章を読みやすく直し、矛盾があればタスクを切る。"},
+    ]),
+}
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    try:
+        ans = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise SystemExit(1)
+    return ans or default
+
+
+def _run(cmd: list[str], cwd: Path) -> None:
+    subprocess.run(cmd, cwd=cwd, check=True, capture_output=True)
+
+
+def wizard(root: Path) -> Path | None:
+    """No-config path for non-engineers: questions in, working team out."""
+    print("zeliji セットアップ — 質問に答えるだけで始められます (Ctrl+Cで中止)\n")
+    if not (root / ".git").exists():
+        print(f"このフォルダ ({root}) はまだ作業場 (gitリポジトリ) ではありません。")
+        choice = _ask("  1) このフォルダをそのまま使う  2) 新しいフォルダを作る  [1/2]: ", "1")
+        if choice == "2":
+            name = _ask("  フォルダ名 [zeliji-playground]: ", "zeliji-playground")
+            root = root / name
+            root.mkdir(exist_ok=True)
+            os.chdir(root)
+        _run(["git", "init", "-b", "main"], root)
+        ident = subprocess.run(["git", "config", "user.name"], cwd=root,
+                               capture_output=True, encoding="utf-8")
+        if not ident.stdout.strip():
+            who = _ask("  コミットに記録する名前 [me]: ", "me")
+            _run(["git", "config", "user.name", who], root)
+            _run(["git", "config", "user.email", f"{who}@local"], root)
+        _run(["git", "commit", "--allow-empty", "-m", "init"], root)
+        print("  ✔ 作業場を用意しました\n")
+
+    print("チーム構成を選んでください:")
+    for key, (label, roles) in TEMPLATES.items():
+        print(f"  {key}) {label}  ({' / '.join(r['name'] for r in roles)})")
+    choice = _ask("  [1]: ", "1")
+    roles = TEMPLATES.get(choice, TEMPLATES["1"])[1]
+
+    auto = _ask("\nエージェントに確認なしで自由に作業させますか?\n"
+                "  (y = 全自動で速いが、信頼できる作業場でのみ推奨 / N = 安全な既定)  [y/N]: ").lower() == "y"
+
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root,
+                            capture_output=True, encoding="utf-8").stdout.strip() or "main"
+    team.write_config(root, branch, roles, autonomous=auto)
+    gitignore = root / ".gitignore"
+    lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    if bus.DIR_NAME + "/" not in lines:
+        gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n", encoding="utf-8")
+    _run(["git", "add", team.CONFIG_NAME, ".gitignore"], root)
+    _run(["git", "commit", "-m", "zeliji setup"], root)
+    print(f"\n✔ 設定完了 ({team.CONFIG_NAME} に保存・コミット済み)。cockpitを起動します…\n")
+    return root
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     root = Path.cwd()
+    if not (root / team.CONFIG_NAME).exists():
+        new_root = wizard(root)
+        if new_root is None:
+            return 1
+        root = new_root
     cfg = team.load_config(root)
     home = root / bus.DIR_NAME
     home.mkdir(exist_ok=True)
@@ -223,6 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:  # bare `zeliji` = the friendly path: wizard or cockpit
+        argv = ["up"]
     args = build_parser().parse_args(argv)
     handlers = {
         "init": cmd_init,

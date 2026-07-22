@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tomllib
@@ -70,6 +71,14 @@ class TeamError(RuntimeError):
     pass
 
 
+# role names become git branch names and directory names — keep them tame
+ROLE_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+
+
+def valid_role_name(name: str) -> bool:
+    return bool(ROLE_NAME_RE.fullmatch(name))
+
+
 def load_config(root: Path) -> dict:
     f = root / CONFIG_NAME
     if not f.exists():
@@ -82,7 +91,44 @@ def load_config(root: Path) -> dict:
     names = [r["name"] for r in roles]
     if len(names) != len(set(names)):
         raise TeamError("duplicate role names in zeliji.toml")
+    for n in names:
+        if not valid_role_name(n):
+            raise TeamError(
+                f"role name '{n}' is invalid — use only letters, digits, - and _"
+            )
     return cfg
+
+
+def _toml_str(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def role_toml(role: dict) -> str:
+    lines = ["[[role]]", f"name = {_toml_str(role['name'])}",
+             f"prompt = {_toml_str(role.get('prompt', ''))}"]
+    if role.get("paths"):
+        lines.append("paths = [" + ", ".join(_toml_str(p) for p in role["paths"]) + "]")
+    return "\n".join(lines) + "\n"
+
+
+def write_config(root: Path, base_branch: str, roles: list[dict],
+                 autonomous: bool = False) -> Path:
+    parts = ["# zeliji team — `zeliji up` で起動\n[project]\n"
+             f"base_branch = {_toml_str(base_branch)}\n"]
+    if autonomous:
+        parts.append('agent_flags = ["--dangerously-skip-permissions"]\n')
+    for r in roles:
+        parts.append("\n" + role_toml(r))
+    f = root / CONFIG_NAME
+    f.write_text("".join(parts), encoding="utf-8")
+    return f
+
+
+def append_role(root: Path, role: dict) -> None:
+    if not valid_role_name(role["name"]):
+        raise TeamError(f"invalid role name: {role['name']}")
+    with open(root / CONFIG_NAME, "a", encoding="utf-8") as fh:
+        fh.write("\n" + role_toml(role))
 
 
 def _git(root: Path, *args: str) -> str:

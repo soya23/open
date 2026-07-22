@@ -20,7 +20,8 @@
 
 なぜ端末エミュレーションを捨てたかは [docs/evolution.md](docs/evolution.md)、
 競合との位置づけは [docs/competitors.md](docs/competitors.md)、
-設計原則は [docs/design.md](docs/design.md)。
+設計原則は [docs/design.md](docs/design.md)、改善50案と精査は
+[docs/ideas.md](docs/ideas.md)、セキュリティは [SECURITY.md](SECURITY.md)。
 
 ## zellij と比べて
 
@@ -46,12 +47,18 @@ pip install -e .   # Python 3.11+、依存は標準ライブラリのみ
 
 ## 使い方
 
+覚えるコマンドは1つ:
+
 ```bash
-cd your-repo
-zeliji init          # zeliji.toml の雛形を生成
-$EDITOR zeliji.toml  # 役割・担当パス・ブリーフを書く
-zeliji up            # worktree準備 → cockpit起動、全役割が自動でシフト開始
+zeliji
 ```
+
+設定がなければ対話ウィザードが起動する — gitリポジトリでなくても
+その場で作れる(新フォルダ提案つき)。チーム構成はテンプレート
+(おまかせ開発 / Web開発 / 文書チーム)から選ぶだけ。答え終わると
+cockpitが開き、全役割が自動で仕事を始める。
+
+手で設定したい人は従来どおり `zeliji init` → `zeliji.toml` 編集 → `zeliji up`。
 
 `zeliji.toml`:
 
@@ -75,17 +82,24 @@ prompt = "You own the API and data layer. Keep endpoints tested."
 paths = ["server/"]
 ```
 
-### cockpit の操作
+### cockpit の操作 (すべて画面下に常時表示)
 
 - `Tab` / `←→` — 役割にフォーカス (入力待ち `!` が消える)
 - `Enter` — フォーカス中のエージェントに次の指示 (同一セッション継続)
 - `g` — 待機中の全員に「ボードを再確認して続けて」
 - `n` — タスク追加 / `s` — メッセージ送信 (`frontend こんにちは` / `all ...`)
-- `q` — 終了
+- `a` — **役割を実行中に追加** (`tester テスト担当` のように打つだけ。
+  worktree作成→エージェント起動→設定への保存まで自動)
+- `b` — タスクボード全画面 (もう一度で戻る)
+- `q` — 終了 (実行中エージェントがいれば確認が入る)
 
-エージェントは各自の worktree 内で、役割チャーターをシステムプロンプトに
-注入された状態で動く。完全自律で走らせたい場合は
-`agent_flags = ["--dangerously-skip-permissions"]` (信頼できるリポジトリのみ)。
+修飾キーは使わない(zellij最大の不満だったキー衝突を構造的に回避)。
+エージェントが入力待ちになると端末ベルで知らせる。
+
+権限は既定で安全 (worktree内の編集と `zeliji`/`git` コマンドのみ)。
+完全自律はウィザードで明示的に選ぶか
+`agent_flags = ["--dangerously-skip-permissions"]` (信頼できるリポジトリ
+のみ。有効中は画面に ⚠AUTO が出る)。詳細は [SECURITY.md](SECURITY.md)。
 
 ### 人間もCLIで同じバスに参加できる
 
