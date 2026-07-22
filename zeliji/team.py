@@ -192,10 +192,18 @@ def merge_roles(
     for role in roles:
         branch = branch_for(role)
         commits, files = progress(root, cfg, role)
+        wt = worktree_path(home, role)
         if commits == 0:
+            if cleanup and _git(root, "branch", "--list", branch):
+                merged = branch in _git(
+                    root, "branch", "--format=%(refname:short)", "--merged", base
+                ).splitlines()
+                if merged:
+                    _remove_role(root, wt, branch)
+                    report.append(f"{role}: already merged — removed worktree and branch")
+                    continue
             report.append(f"{role}: nothing to merge")
             continue
-        wt = worktree_path(home, role)
         if wt.is_dir() and _git(wt, "status", "--porcelain", "--untracked-files=no"):
             raise TeamError(
                 f"{role}: worktree has uncommitted changes — commit there first"
@@ -209,11 +217,17 @@ def merge_roles(
             ) from e
         report.append(f"{role}: merged {commits} commit(s), {files} file(s)")
         if cleanup:
-            if wt.is_dir():
-                _git(root, "worktree", "remove", str(wt))
-            _git(root, "branch", "-d", branch)
+            _remove_role(root, wt, branch)
             report.append(f"{role}: removed worktree and branch")
     return report
+
+
+def _remove_role(root: Path, wt: Path, branch: str) -> None:
+    # the branch is merged at this point, so stray untracked files in the
+    # worktree (agent scratch, copied includes) are safe to discard
+    if wt.is_dir():
+        _git(root, "worktree", "remove", "--force", str(wt))
+    _git(root, "branch", "-d", branch)
 
 
 def overlap_report(root: Path, cfg: dict) -> list[str]:
