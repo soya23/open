@@ -24,6 +24,10 @@ KICKOFF = (
     "着手可能な自分のタスクをclaimして実行すること。コミットまで終えたら task done。"
     "着手可能なタスクがなくなるまで繰り返し、状況を報告して終えること。"
 )
+KICKOFF_RESUME = (
+    "再開。前回の続きから。zeliji inbox とタスクボードを確認し、"
+    "やりかけの作業と着手可能なタスクがあれば進めて。なければ状況を報告して待機。"
+)
 
 # out-of-the-box the agents can edit their own worktree and run the
 # coordination commands, nothing broader; set agent_flags in zeliji.toml
@@ -57,8 +61,34 @@ class Agent(threading.Thread):
         self.attention = False  # turn finished and nobody has looked yet
         self._interrupted = False
         self.proc: subprocess.Popen | None = None
-        self.log = home / "agents" / f"{role}.jsonl"
-        self.log.parent.mkdir(parents=True, exist_ok=True)
+        agents_dir = home / "agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        self.log = agents_dir / f"{role}.jsonl"
+        self._session_file = agents_dir / f"{role}.session"
+        self.resumed = False
+        # screen/tmux's defining invention, ported to agents: closing the
+        # cockpit detaches; reopening reattaches to the same claude session
+        if self._session_file.exists():
+            sid = self._session_file.read_text(encoding="utf-8").strip()
+            if sid:
+                self.session_id = sid
+                self.resumed = True
+                self._replay()
+
+    def _replay(self) -> None:
+        """Rebuild the visible timeline from the log so a reattached
+        column is not empty."""
+        if not self.log.exists():
+            return
+        for line in self.log.read_text(encoding="utf-8").splitlines()[-80:]:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") in ("assistant", "result"):
+                self._handle(obj)
+        if self.events:
+            self.events.append(("you", "— 再接続しました。ここから続き —"))
 
     # ------------------------------------------------------------ control
 
@@ -90,9 +120,12 @@ class Agent(threading.Thread):
                 self.state = ERROR
                 self.events.append(("error", str(e)))
 
-    def _turn(self, prompt: str) -> None:
+    def _turn(self, prompt: str, _retry: bool = False) -> None:
         self.state = RUNNING
-        self.events.append(("you", prompt))
+        if not _retry:
+            self.events.append(("you", prompt))
+        used_resume = self.session_id is not None
+        events_before = len(self.events)
         import shutil
 
         claude = shutil.which("claude") or "claude"  # windows needs claude.cmd resolved
@@ -125,6 +158,14 @@ class Agent(threading.Thread):
                 except json.JSONDecodeError:
                     continue
         code = self.proc.wait()
+        if (code != 0 and used_resume and not _retry and not self._interrupted
+                and len(self.events) == events_before):
+            # the resumed session is gone (new machine, cleaned cache…) —
+            # fall back to a fresh session once instead of erroring out
+            self.session_id = None
+            self._session_file.unlink(missing_ok=True)
+            self.events.append(("error", "前回セッションを再開できず — 新規セッションで続行"))
+            return self._turn(prompt, _retry=True)
         if self._interrupted:
             self._interrupted = False
             self.state = WAITING
@@ -139,7 +180,10 @@ class Agent(threading.Thread):
     def _handle(self, obj: dict) -> None:
         kind = obj.get("type")
         if kind == "system" and obj.get("subtype") == "init":
-            self.session_id = obj.get("session_id", self.session_id)
+            sid = obj.get("session_id")
+            if sid:
+                self.session_id = sid
+                self._session_file.write_text(sid, encoding="utf-8")
         elif kind == "assistant":
             for block in obj.get("message", {}).get("content", []):
                 if block.get("type") == "text" and block.get("text", "").strip():
@@ -166,6 +210,7 @@ def spawn_team(cfg: dict, home: Path, worktrees: dict[str, Path]) -> list[Agent]
             flags=list(project.get("agent_flags", DEFAULT_FLAGS)),
         )
         agent.start()
-        agent.instruct(project.get("kickoff", KICKOFF))
+        default_kickoff = KICKOFF_RESUME if agent.resumed else KICKOFF
+        agent.instruct(project.get("kickoff", default_kickoff))
         agents.append(agent)
     return agents

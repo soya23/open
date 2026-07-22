@@ -55,7 +55,7 @@ zellijコミュニティの実データ (Issue賛成数・Discussion・ブログ
     zellijの声は「共有はデフォルト閲覧専用で」— read-onlyを既定にする
 30. ○ スマホプッシュ通知 (ntfy連携) — tap-to-tmuxが示した実需
 31. ○ モバイルから承認だけ (通知への返信を指示として注入)
-32. ◎ **セッション永続化** — session_idを保存し、次回upで各役割の文脈ごと再開
+32. ✅ **セッション永続化** — session_idを保存し、次回upで各役割の文脈ごと再開
     (zellij session resurrection 149👍 のエージェント版)
 33. × リモートサーバ実行 — 構成が複雑化。SSH+zeliji で足りる
 34. ○ 閲覧専用の共有URL (29の発展)
