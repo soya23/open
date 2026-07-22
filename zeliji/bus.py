@@ -102,14 +102,21 @@ def whoami() -> str:
 
 # ---------------------------------------------------------------- tasks
 
-def task_add(home: Path, title: str, role: str | None = None) -> dict:
+def task_add(
+    home: Path, title: str, role: str | None = None, after: list[int] | None = None
+) -> dict:
     with locked(home):
         tasks = _load_tasks(home)
+        ids = {t["id"] for t in tasks}
+        for dep in after or []:
+            if dep not in ids:
+                raise BusError(f"--after {dep}: no such task")
         task = {
-            "id": 1 + max((t["id"] for t in tasks), default=0),
+            "id": 1 + max(ids, default=0),
             "title": title,
             "role": role,
             "status": "todo",
+            "after": after or [],
             "by": whoami(),
             "created": _now(),
             "updated": _now(),
@@ -117,6 +124,12 @@ def task_add(home: Path, title: str, role: str | None = None) -> dict:
         tasks.append(task)
         _save_tasks(home, tasks)
     return task
+
+
+def blocked_by(task: dict, tasks: list[dict]) -> list[int]:
+    """Ids of unfinished dependencies, empty if the task is ready."""
+    done = {t["id"] for t in tasks if t["status"] == "done"}
+    return [dep for dep in task.get("after", []) if dep not in done]
 
 
 def task_list(home: Path, status: str | None = None) -> list[dict]:
@@ -135,6 +148,13 @@ def _set_status(home: Path, task_id: int, status: str, role: str | None) -> dict
                     raise BusError(
                         f"task #{task_id} is already claimed by '{t['role']}'"
                     )
+                if status == "doing":
+                    blocked = blocked_by(t, tasks)
+                    if blocked:
+                        deps = ", ".join(f"#{d}" for d in blocked)
+                        raise BusError(
+                            f"task #{task_id} is blocked by unfinished {deps}"
+                        )
                 t["status"] = status
                 if role:
                     t["role"] = role

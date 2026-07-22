@@ -18,11 +18,19 @@ git worktree で隔離しつつ、共有タスクボードとメッセージン�
 | | zellij 単体 | zeliji |
 |---|---|---|
 | 画面分割 | ✅ | ✅ (zellij をそのまま利用) |
-| セッション間のタスク共有 | ❌ | ✅ 共有タスクボード (claim で取り合い防止) |
+| セッション間のタスク共有 | ❌ | ✅ 共有タスクボード (claim で取り合い防止、`--after` で依存関係) |
 | セッション間メッセージ | ❌ | ✅ `zeliji say` / `zeliji inbox` |
 | 編集コンフリクト | 💥 同一ツリーで衝突 | ✅ 役割ごとに git worktree で完全隔離 |
 | コンフリクトの予兆検知 | ❌ | ✅ ブランチ間の同一ファイル編集を警告 |
 | 役割の定義 | 手動で毎回 | ✅ `zeliji.toml` に宣言、システムプロンプトに自動注入 |
+| 成果の回収 | ❌ 手動 merge | ✅ `zeliji merge --cleanup` で収穫から掃除まで1コマンド |
+
+類似ツール (claude-squad, vibe-kanban, 公式 Agent Teams 等) との比較は
+[docs/competitors.md](docs/competitors.md)、設計原則は
+[docs/design.md](docs/design.md) を参照。要点: **worktree 隔離と
+セッション間協調を両方持つ軽量 CLI は空白地帯**で、ボードがプレーン
+ファイルなので人間もどのエージェント (Claude/Codex/Gemini) も同じ規約で
+参加できる。
 
 ## インストール
 
@@ -46,6 +54,8 @@ zeliji up            # worktree 作成 → 役割充填済み zellij が起動
 ```toml
 [project]
 base_branch = "main"
+include = [".env"]        # gitignore済みでも各worktreeへコピー
+setup = "npm install"     # worktree作成時に1回実行
 
 [[role]]
 name = "frontend"
@@ -69,28 +79,32 @@ paths = ["server/"]
 
 ```bash
 zeliji task add "ログインAPIを実装" --role backend
+zeliji task add "ログイン画面" --after 1   # #1が終わるまでclaim不可
 zeliji task list
-zeliji task claim 3        # 二重着手はエラーになる
+zeliji task claim 3        # 二重着手・依存未完了はエラーになる
 zeliji task done 3
 zeliji say frontend "APIのスキーマ変えたよ、/docs見て"
 zeliji say all "mainをrebaseして"
 zeliji inbox               # 自分宛て・全体宛ての未読
-zeliji status              # 各worktreeの状態 + 同一ファイル編集の警告
+zeliji status              # 進捗(コミット数/変更ファイル数) + 同一ファイル編集の警告
 ```
 
 状態はすべて `.zeliji/bus/` のファイル (flock で排他) にあるので、
 人間もペイン外から同じコマンドで参加できる。
 
-## マージ
+## マージ (収穫)
 
-各役割は自分のブランチ `zeliji/<role>` にコミットする。統合は普通の git:
+各役割は自分のブランチ `zeliji/<role>` にコミットする。回収は1コマンド:
 
 ```bash
-git merge zeliji/frontend zeliji/backend   # または PR
+zeliji merge                    # 全役割のブランチをbaseへ (コミットのある役割のみ)
+zeliji merge frontend           # 特定の役割だけ
+zeliji merge --cleanup          # マージ後にworktreeとブランチも削除
 ```
 
 同一ファイルを複数役割が触った時点で `zeliji status` とダッシュボードが
-警告するので、マージ前に気づける。
+警告するので、マージ前に気づける。コンフリクトしたら安全に abort して
+手動解決を案内する。普通の `git merge zeliji/<role>` も当然使える。
 
 ## ライセンス
 

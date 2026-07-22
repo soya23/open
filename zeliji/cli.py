@@ -33,6 +33,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if bus.DIR_NAME + "/" not in lines:
         gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n")
         print("added .zeliji/ to .gitignore")
+    print("next: edit zeliji.toml, commit it with .gitignore, then `zeliji up`")
     return 0
 
 
@@ -41,10 +42,9 @@ def cmd_up(args: argparse.Namespace) -> int:
     cfg = team.load_config(root)
     home = root / bus.DIR_NAME
     home.mkdir(exist_ok=True)
-    base = cfg.get("project", {}).get("base_branch", "main")
 
     for role in cfg["role"]:
-        wt = team.ensure_worktree(root, home, role["name"], base)
+        wt = team.ensure_worktree(root, home, role["name"], cfg)
         team.write_charter(home, role)
         print(f"role {role['name']}: worktree {wt} (branch {team.branch_for(role['name'])})")
 
@@ -52,6 +52,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     print(f"layout: {kdl}")
 
     if args.dry_run:
+        print("\nnext: `zellij --layout .zeliji/layout.kdl`, or rerun without --dry-run")
         return 0
     if shutil.which("zellij") is None:
         print(
@@ -66,15 +67,23 @@ def cmd_up(args: argparse.Namespace) -> int:
 def cmd_task(args: argparse.Namespace) -> int:
     home = _home()
     if args.task_cmd == "add":
-        t = bus.task_add(home, args.title, args.role)
-        print(f"added #{t['id']}: {t['title']}" + (f" @{t['role']}" if t["role"] else ""))
+        t = bus.task_add(home, args.title, args.role, args.after)
+        deps = f" (after {', '.join(f'#{d}' for d in t['after'])})" if t["after"] else ""
+        print(f"added #{t['id']}: {t['title']}" + (f" @{t['role']}" if t["role"] else "") + deps)
+        print(f"next: `zeliji task claim {t['id']}` to start it")
     elif args.task_cmd == "list":
-        for t in bus.task_list(home, args.status):
+        tasks = bus.task_list(home)
+        shown = [t for t in tasks if not args.status or t["status"] == args.status]
+        if not shown:
+            print('(empty — `zeliji task add "..."` to file work)')
+        for t in shown:
             who = f" @{t['role']}" if t.get("role") else ""
-            print(f"[{t['status']:5}] #{t['id']} {t['title']}{who}")
+            blocked = bus.blocked_by(t, tasks)
+            mark = f" ⧗blocked by {', '.join(f'#{d}' for d in blocked)}" if blocked and t["status"] == "todo" else ""
+            print(f"[{t['status']:5}] #{t['id']} {t['title']}{who}{mark}")
     elif args.task_cmd == "claim":
         t = bus.task_claim(home, args.id, args.role)
-        print(f"claimed #{t['id']} as {t['role']}")
+        print(f"claimed #{t['id']} as {t['role']} — `zeliji task done {t['id']}` when finished")
     elif args.task_cmd == "done":
         t = bus.task_done(home, args.id)
         print(f"done #{t['id']}: {t['title']}")
@@ -105,17 +114,20 @@ def cmd_status(args: argparse.Namespace) -> int:
     root = home.parent
     cfg = team.load_config(root)
     for role in cfg["role"]:
-        wt = team.worktree_path(home, role["name"])
+        name = role["name"]
+        wt = team.worktree_path(home, name)
         if not wt.is_dir():
-            print(f"{role['name']:12} (no worktree — run `zeliji up`)")
+            print(f"{name:12} (no worktree — run `zeliji up`)")
             continue
         res = subprocess.run(
             ["git", "-C", str(wt), "status", "--porcelain"],
             capture_output=True, text=True,
         )
         dirty = len([ln for ln in res.stdout.splitlines() if ln.strip()])
-        state = f"{dirty} uncommitted change(s)" if dirty else "clean"
-        print(f"{role['name']:12} {team.branch_for(role['name']):24} {state}")
+        state = f"{dirty} uncommitted" if dirty else "clean"
+        commits, files = team.progress(root, cfg, name)
+        ahead = f"{commits} commit(s), {files} file(s) vs base" if commits else "no commits yet"
+        print(f"{name:12} {team.branch_for(name):24} {state:14} {ahead}")
     warnings = team.overlap_report(root, cfg)
     if warnings:
         print()
@@ -123,6 +135,26 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(w)
     else:
         print("\nno cross-role file overlaps ✔")
+    if any(team.progress(root, cfg, r["name"])[0] for r in cfg["role"]):
+        print("harvest with `zeliji merge` (add --cleanup to also remove worktrees)")
+    return 0
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    home = _home()
+    root = home.parent
+    cfg = team.load_config(root)
+    warnings = team.overlap_report(root, cfg)
+    for w in warnings:
+        print(w)
+    roles = args.roles or [r["name"] for r in cfg["role"]]
+    known = {r["name"] for r in cfg["role"]}
+    unknown = [r for r in roles if r not in known]
+    if unknown:
+        print(f"zeliji: unknown role(s): {', '.join(unknown)}", file=sys.stderr)
+        return 1
+    for line in team.merge_roles(root, cfg, roles, cleanup=args.cleanup):
+        print(line)
     return 0
 
 
@@ -151,6 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
     t_add = tsub.add_parser("add")
     t_add.add_argument("title")
     t_add.add_argument("--role", help="assign to a role")
+    t_add.add_argument("--after", type=int, action="append",
+                       help="task id this depends on (repeatable)")
     t_list = tsub.add_parser("list")
     t_list.add_argument("--status", choices=["todo", "doing", "done"])
     t_claim = tsub.add_parser("claim")
@@ -166,7 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
     inbox = sub.add_parser("inbox", help="read unread messages for your role")
     inbox.add_argument("--role")
 
-    sub.add_parser("status", help="worktree states and conflict watch")
+    sub.add_parser("status", help="worktree states, progress, conflict watch")
+
+    merge = sub.add_parser("merge", help="merge role branches into the base branch")
+    merge.add_argument("roles", nargs="*", help="roles to merge (default: all)")
+    merge.add_argument("--cleanup", action="store_true",
+                       help="remove worktree and branch after a successful merge")
 
     watch = sub.add_parser("watch", help="live dashboard (used by the layout)")
     watch.add_argument("--interval", type=float, default=2.0)
@@ -183,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         "say": cmd_say,
         "inbox": cmd_inbox,
         "status": cmd_status,
+        "merge": cmd_merge,
         "watch": cmd_watch,
     }
     try:

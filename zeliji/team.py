@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tomllib
 from pathlib import Path
@@ -15,6 +16,10 @@ SAMPLE_CONFIG = """\
 [project]
 # branch every role's worktree starts from
 base_branch = "main"
+# gitignored files copied into each new worktree (like .worktreeinclude)
+# include = [".env", ".env.local"]
+# command run once inside each new worktree
+# setup = "npm install"
 
 [[role]]
 name = "frontend"
@@ -49,8 +54,10 @@ worktree, coordinating through a shared bus.
 
 ## Coordinating with the team (run these with Bash)
 - `zeliji task list` — see the shared task board.
-- `zeliji task add "<title>" [--role <name>]` — file work for yourself or others.
-- `zeliji task claim <id>` — claim a task before starting it (fails if taken).
+- `zeliji task add "<title>" [--role <name>] [--after <id>]` — file work \
+for yourself or others; `--after` marks a dependency.
+- `zeliji task claim <id>` — claim a task before starting it (fails if \
+taken or blocked by an unfinished dependency).
 - `zeliji task done <id>` — mark your task finished.
 - `zeliji say <role>|all "<text>"` — message a teammate or everyone.
 - `zeliji inbox` — read your unread messages. **Check this and the task \
@@ -94,7 +101,9 @@ def worktree_path(home: Path, role: str) -> Path:
     return home / "worktrees" / role
 
 
-def ensure_worktree(root: Path, home: Path, role: str, base: str) -> Path:
+def ensure_worktree(root: Path, home: Path, role: str, cfg: dict) -> Path:
+    project = cfg.get("project", {})
+    base = project.get("base_branch", "main")
     path = worktree_path(home, role)
     if path.is_dir():
         return path
@@ -108,6 +117,17 @@ def ensure_worktree(root: Path, home: Path, role: str, base: str) -> Path:
     # pointer back to the shared bus, so `zeliji` works from inside
     (path / bus.LINK_FILE).write_text(str(home.resolve()) + "\n")
     _ensure_ignored(path, bus.LINK_FILE)
+    for rel in project.get("include", []):
+        src = root / rel
+        if src.is_file():
+            dst = path / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    setup = project.get("setup")
+    if setup:
+        res = subprocess.run(setup, shell=True, cwd=path, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise TeamError(f"setup failed in {path}: {res.stderr.strip()[-500:]}")
     return path
 
 
@@ -141,6 +161,59 @@ def write_charter(home: Path, role: dict) -> Path:
     f = roles_dir / f"{role['name']}.md"
     f.write_text(charter)
     return f
+
+
+def progress(root: Path, cfg: dict, role: str) -> tuple[int, int]:
+    """(commits ahead of base, files changed) for a role's branch."""
+    base = cfg.get("project", {}).get("base_branch", "main")
+    branch = branch_for(role)
+    if not _git(root, "branch", "--list", branch):
+        return (0, 0)
+    commits = int(_git(root, "rev-list", "--count", f"{base}..{branch}") or 0)
+    files = _git(root, "diff", "--name-only", f"{base}...{branch}")
+    return (commits, len(files.splitlines()) if files else 0)
+
+
+def merge_roles(
+    root: Path, cfg: dict, roles: list[str], cleanup: bool = False
+) -> list[str]:
+    """Merge each role branch into the base branch; stop on conflict."""
+    base = cfg.get("project", {}).get("base_branch", "main")
+    current = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    if current != base:
+        raise TeamError(
+            f"main checkout is on '{current}' — `git checkout {base}` first"
+        )
+    if _git(root, "status", "--porcelain", "--untracked-files=no"):
+        raise TeamError("main checkout has uncommitted changes — commit or stash first")
+
+    home = root / bus.DIR_NAME
+    report = []
+    for role in roles:
+        branch = branch_for(role)
+        commits, files = progress(root, cfg, role)
+        if commits == 0:
+            report.append(f"{role}: nothing to merge")
+            continue
+        wt = worktree_path(home, role)
+        if wt.is_dir() and _git(wt, "status", "--porcelain", "--untracked-files=no"):
+            raise TeamError(
+                f"{role}: worktree has uncommitted changes — commit there first"
+            )
+        try:
+            _git(root, "merge", "--no-ff", branch, "-m", f"merge {branch} ({commits} commits)")
+        except TeamError as e:
+            _git(root, "merge", "--abort")
+            raise TeamError(
+                f"{role}: merge conflict — resolve manually with `git merge {branch}`"
+            ) from e
+        report.append(f"{role}: merged {commits} commit(s), {files} file(s)")
+        if cleanup:
+            if wt.is_dir():
+                _git(root, "worktree", "remove", str(wt))
+            _git(root, "branch", "-d", branch)
+            report.append(f"{role}: removed worktree and branch")
+    return report
 
 
 def overlap_report(root: Path, cfg: dict) -> list[str]:
