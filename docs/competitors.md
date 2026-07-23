@@ -29,6 +29,28 @@ Anthropic 公式が `--worktree` フラグと Agent Teams(実験的)を投入**�
 | [Conductor](https://www.conductor.build/) | GUI (Mac) | ○ | × | 非公開 | 活発 (YC S24) |
 | 公式 `--worktree` / [Agent Teams](https://code.claude.com/docs/en/agent-teams) | CLI | ○ | ◎ 共有タスク+メールボックス | – | Teams は実験的・Claude 専用 |
 
+## 追記 (2026-07-22): 「エージェント多重化」カテゴリの勃発
+
+7月に入り「agent multiplexer / agent-aware terminal」を名乗る製品が
+一斉に出現した。カテゴリ自体が正しかった証拠であり、競合の本格化でもある:
+
+- **Herdr** (github.com/ogulcancelik/herdr) — Rust製単一バイナリの
+  「agent multiplexer」。15+エージェント対応、状態サイドバー
+  (blocked/working/done/idle)、常駐サーバでセッション永続、マウス対応。
+  ただし**ペインの中身は生TTYのまま**(tmuxモデル+状態表示)で、
+  タスク共有・メッセージング・worktree隔離・マージ回収はない
+- **Zentty** (zentty.org) — Ghostty上に構築したMacネイティブ端末。
+  「worklanes」+エージェント注意状態サイドバー。Mac専用、協調機能なし
+- **Supacode** — 「coding agent command center」。worktree隔離+GitHub
+  ワークフロー中心のオーケストレーション重量級
+- SoloTerm / Muxy など同系統が続々
+
+**含意**: 「状態が見える多重化」は数ヶ月でコモディティ化する。zeliji の
+守るべき差別化は (1) 協調バス (タスクclaim・依存・メッセージング)、
+(2) 構造化タイムライン (生TTYを捨てた人間向け要約)、(3) merge までの
+一気通貫、(4) 非エンジニア向け日本語UX+目的ファーストのウィザード。
+ここは上記のどれも持っていない。
+
 ## zeliji の空白地帯(差別化)
 
 1. **「隔離」と「協調」の軽量な両立**。worktree 系 CLI はほぼ全て協調ゼロ、
