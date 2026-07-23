@@ -225,6 +225,9 @@ def cmd_task(args: argparse.Namespace) -> int:
     elif args.task_cmd == "done":
         t = bus.task_done(home, args.id)
         print(f"完了 #{t['id']}: {t['title']}")
+    elif args.task_cmd == "drop":
+        t = bus.task_drop(home, args.id)
+        print(f"削除 #{t['id']}: {t['title']}")
     return 0
 
 
@@ -338,6 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
     t_claim.add_argument("--role")
     t_done = tsub.add_parser("done")
     t_done.add_argument("id", type=int)
+    t_drop = tsub.add_parser("drop")
+    t_drop.add_argument("id", type=int)
 
     say = sub.add_parser("say", help="message a role, or `all`")
     say.add_argument("to")

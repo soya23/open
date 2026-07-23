@@ -147,6 +147,20 @@ def task_add(
     return task
 
 
+def task_drop(home: Path, task_id: int) -> dict:
+    with locked(home):
+        tasks = _load_tasks(home)
+        keep = [t for t in tasks if t["id"] != task_id]
+        if len(keep) == len(tasks):
+            raise BusError(f"タスク #{task_id} は存在しません")
+        dropped = next(t for t in tasks if t["id"] == task_id)
+        for t in keep:  # forget dependencies on the dropped task
+            if task_id in t.get("after", []):
+                t["after"] = [d for d in t["after"] if d != task_id]
+        _save_tasks(home, keep)
+    return dropped
+
+
 def blocked_by(task: dict, tasks: list[dict]) -> list[int]:
     """Ids of unfinished dependencies, empty if the task is ready."""
     done = {t["id"] for t in tasks if t["status"] == "done"}

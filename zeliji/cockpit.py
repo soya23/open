@@ -51,7 +51,11 @@ HELP = """\
    g        待機中の全員に「続けて」
    v        詳細表示の切替 (ツール実行ログを全文で見る)
    K        全員の作業をいますぐ中断 (緊急停止。セッションは残る)
+   Esc      ひとつ戻る (入力・メニュー・スクロールの解除)。終了は q だけ
+   ↑ (入力中) 前に送った内容を呼び出す / ↓ で戻す
    q        終了 (作業中の役割がいれば確認します)
+
+ 成果の回収 (merge) はメニュー (m) から。タスクの削除は `zeliji task drop <id>`
 """
 
 
@@ -136,7 +140,16 @@ class Cockpit:
         self._belled: set[str] = set()
         self._title = ""
         self.menu: int | None = None  # selected row of the action menu
+        self.overlay: list[str] | None = None  # transient result screen
+        self._flash: tuple[str, float] | None = None
+        self.history: dict[str, list[str]] = {}
+        self._hist_pos = 0
+        self.lockfile: Path | None = None
         self._load_view()
+
+    def flash(self, text: str) -> None:
+        """Feedback for every action: shown in the footer for a few seconds."""
+        self._flash = (text, time.time() + 4)
 
     # ------------------------------------------------------------ menu
     # the zellij lesson taken to its end: every action is on screen,
@@ -154,13 +167,16 @@ class Cockpit:
             return go
 
         def nudge():
+            hit = [a.role for a in self.agents if a.state in (agentrun.WAITING, agentrun.ERROR)]
             for a in self.agents:
                 if a.state in (agentrun.WAITING, agentrun.ERROR):
                     a.instruct(NUDGE)
+            self.flash(f"→ {', '.join(hit)} に「続けて」を送りました" if hit else "全員作業中です")
 
         def stop_all():
             for a in self.agents:
                 a.interrupt()
+            self.flash("⏹ 全員の作業を中断しました (Enter で再指示できます)")
 
         focused = self.agents[self.focus].role if self.agents else "?"
         return [
@@ -172,8 +188,20 @@ class Cockpit:
             ("全員に「続けて」", "待機中・エラーの役割を再稼働 (g)", nudge),
             ("詳細表示の切替", "ツール実行ログを全文で見る (v)", toggle("verbose")),
             ("全員の作業を中断", "緊急停止。セッションは残る (K)", stop_all),
+            ("成果を回収する (merge)", "全役割のブランチを取り込む。安全確認つき", self._do_merge),
             ("キー一覧", "全ショートカットの説明 (?)", toggle("show_help")),
         ]
+
+    def _do_merge(self) -> None:
+        try:
+            report = team.merge_roles(self.root, self.cfg,
+                                      [r["name"] for r in self.cfg["role"]])
+            self.overlay = [BOLD + " 回収結果" + RESET, ""] + \
+                [f"  {ln}" for ln in report] + \
+                ["", DIM + "  worktreeとブランチの掃除は `zeliji merge --cleanup`" + RESET]
+        except team.TeamError as e:
+            self.overlay = [BOLD + " 回収できませんでした" + RESET, "", f"  {YELLOW}{e}{RESET}"]
+        self.overlay += ["", DIM + "  (何かキーを押すと戻ります)" + RESET]
 
     def _compose_menu(self, w: int, h: int) -> list[str]:
         items = self._menu_items()
@@ -216,6 +244,10 @@ class Cockpit:
         return [clip_ansi(l, w) for l in self._compose(w, h)]
 
     def _compose(self, w: int, h: int) -> list[str]:
+        if self.overlay is not None:
+            lines = list(self.overlay)
+            lines += [""] * max(0, h - len(lines))
+            return lines[:h]
         if self.menu is not None:
             return self._compose_menu(w, h)
         if self.show_help:
@@ -317,6 +349,8 @@ class Cockpit:
             board = pad_cells(board, w - 1)
         if self.input_target:
             msg = HINTS_INPUT  # while typing, show how to finish or back out
+        elif self._flash and time.time() < self._flash[1]:
+            msg = CYAN + " " + self._flash[0]
         else:
             msgs = bus.messages(self.home, limit=1)
             msg = f" 連絡: {msgs[-1]['from']}→{msgs[-1]['to']}: {msgs[-1]['text']}" if msgs else ""
@@ -381,20 +415,31 @@ class Cockpit:
         self.buffer, self.input_target = "", None
         if not text:
             return
+        self.history.setdefault(target, []).append(text)
         if target == "agent":
-            self.agents[self.focus].instruct(text)
+            agent = self.agents[self.focus]
+            busy = agent.state == agentrun.RUNNING
+            agent.instruct(text)
+            self.flash(f"◷ {agent.role} は作業中 — 今の作業が終わり次第伝えます"
+                       if busy else f"→ {agent.role} に指示しました")
         elif target == "task":
-            bus.task_add(self.home, text)
+            t = bus.task_add(self.home, text)
+            woken = [a.role for a in self.agents if a.state == agentrun.WAITING]
             for agent in self.agents:  # a fresh task wakes the idle team
                 if agent.state == agentrun.WAITING:
                     agent.instruct(NUDGE)
+            self.flash(f"✎ タスク #{t['id']} を追加" +
+                       (f" — {', '.join(woken)} が確認に向かいます" if woken
+                        else " — 手が空いた役割が拾います"))
         elif target == "say":
             to, _, body = text.partition(" ")
             roles = {a.role for a in self.agents}
             if to in roles | {"all"} and body:
                 bus.say(self.home, to, body)
+                self.flash(f"連絡を {to} に送りました")
             else:
                 bus.say(self.home, "all", text)
+                self.flash("連絡を全員に送りました")
         elif target == "role":
             self._add_role(text)
 
@@ -414,7 +459,8 @@ class Cockpit:
             self.cfg["role"].append(role)
             team.ensure_worktree(self.root, self.home, name, self.cfg)
             team.write_charter(self.home, role)
-        except team.TeamError:
+        except team.TeamError as e:
+            self.flash(f"✖ 役割を追加できませんでした: {e}")
             return
         project = self.cfg.get("project", {})
         agent = agentrun.Agent(
@@ -430,15 +476,28 @@ class Cockpit:
         self.agents.append(agent)
         self.weights.append(1.0)
         self.focus = len(self.agents) - 1
+        self.flash(f"＋ 役割 {name} が参加しました")
 
     def _key(self, ch: str) -> bool:
         """Handle one key from Term.read_keys; return False to quit."""
         is_enter = ch in ("\n", "\r")
+        if self.overlay is not None:  # any key dismisses a result screen
+            self.overlay = None
+            return True
         if self.input_target is not None:
+            hist = self.history.get(self.input_target, [])
             if ch == "\x1b":
                 self.buffer, self.input_target = "", None
+                self._hist_pos = 0
             elif is_enter:
                 self._submit()
+                self._hist_pos = 0
+            elif ch == term.UP and hist:  # recall previous inputs
+                self._hist_pos = min(self._hist_pos + 1, len(hist))
+                self.buffer = hist[-self._hist_pos]
+            elif ch == term.DOWN and hist:
+                self._hist_pos = max(self._hist_pos - 1, 0)
+                self.buffer = hist[-self._hist_pos] if self._hist_pos else ""
             elif ch in ("\x7f", "\x08"):
                 self.buffer = self.buffer[:-1]
             elif len(ch) == 1 and ch.isprintable():
@@ -463,13 +522,18 @@ class Cockpit:
         if self.show_help and ch in ("?", "\x1b"):
             self.show_help = False
             return True
-        if ch in ("q", "\x1b", "\x03"):
+        if ch in ("q", "\x03"):
             # zellij lesson (issue #467, 41 upvotes): confirm before killing
             # a session with live agents; Ctrl-C stays immediate
-            if ch != "\x03" and any(a.state == agentrun.RUNNING for a in self.agents):
+            if ch == "q" and any(a.state == agentrun.RUNNING for a in self.agents):
                 self.confirm_quit = True
                 return True
             return False
+        if ch == "\x1b":  # Esc means "back", never "quit"
+            if self.scroll.get(self.focus):
+                self.scroll[self.focus] = 0
+            self.agents[self.focus].attention = False
+            return True
         if ch == "m":
             self.menu = 0
         elif ch == "?":
@@ -507,6 +571,7 @@ class Cockpit:
         elif ch == "K":
             for agent in self.agents:
                 agent.interrupt()
+            self.flash("⏹ 全員の作業を中断しました (Enter で再指示できます)")
         elif ch == "g":
             for agent in self.agents:
                 if agent.state in (agentrun.WAITING, agentrun.ERROR):
@@ -538,9 +603,30 @@ class Cockpit:
             self._title = title
             sys.stdout.write(f"\x1b]0;{title}\x07")
 
+    def _auto_assign(self) -> None:
+        """A waiting agent is pointed at the board whenever it contains
+        ready unclaimed work it hasn't been shown yet — tasks added at
+        any time get picked up, not just tasks added while idle."""
+        tasks = bus.task_list(self.home)
+        ready = tuple(sorted(
+            t["id"] for t in tasks
+            if t["status"] == "todo" and not bus.blocked_by(t, tasks)))
+        if not ready:
+            return
+        for agent in self.agents:
+            if agent.state == agentrun.WAITING and getattr(agent, "_auto_key", None) != ready:
+                agent._auto_key = ready
+                agent.instruct(NUDGE)
+
     def loop(self, t: term.Term) -> None:
         while True:
+            if self.lockfile is not None:  # heartbeat against double cockpits
+                try:
+                    self.lockfile.touch()
+                except OSError:
+                    pass
             self._dispatch_control()
+            self._auto_assign()
             self._update_title()
             # terminal bell when an agent newly needs attention
             for agent in self.agents:
@@ -557,14 +643,25 @@ class Cockpit:
 
 
 def run(cfg: dict, home: Path, root: Path) -> None:
+    lock = home / "cockpit.lock"
+    if lock.exists() and time.time() - lock.stat().st_mtime < 10:
+        print("この作業場では既に別の cockpit が動いています (二重起動するとエージェントが重複します)",
+              file=sys.stderr)
+        print("異常終了の直後なら10秒待つか、.zeliji/cockpit.lock を削除してください",
+              file=sys.stderr)
+        return
+    lock.parent.mkdir(exist_ok=True)
+    lock.touch()
     worktrees = {r["name"]: team.worktree_path(home, r["name"]) for r in cfg["role"]}
     agents = agentrun.spawn_team(cfg, home, worktrees)
     cp = Cockpit(cfg, home, root, agents)
+    cp.lockfile = lock
     try:
         with term.Term() as t:
             cp.loop(t)
     finally:
         cp.save_view()
+        lock.unlink(missing_ok=True)
         sys.stdout.write("\x1b]0;\x07")  # clear the tab title
         for agent in agents:
             agent.stop()
