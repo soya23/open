@@ -124,8 +124,13 @@ zeliji task add "ログインAPIを実装" --role backend
 zeliji task add "ログイン画面" --after 1   # #1が終わるまでclaim不可
 zeliji task list
 zeliji say frontend "APIのスキーマ変えたよ"
+zeliji tell core "先にテストを書いて"       # 外部からエージェントを直接操縦
 zeliji status        # 進捗 + 同一ファイル編集の警告
 ```
+
+`tell` は tmux `send-keys` の教訓 ([docs/voices.md](docs/voices.md)):
+別ターミナルからでも、スクリプトからでも、**Claude Code 自身からでも**
+チームに指示が出せる。
 
 状態は全部 `.zeliji/bus/` のプレーンファイル (flock で排他)。エージェントも
 人間も、なんなら Codex や Gemini でも、同じ規約で参加できる。

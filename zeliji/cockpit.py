@@ -404,8 +404,21 @@ class Cockpit:
 
     # ------------------------------------------------------------ loop
 
+    def _dispatch_control(self) -> None:
+        """Deliver `zeliji tell` instructions queued from outside."""
+        for m in bus.drain_control(self.home):
+            prompt = m.get("prompt", "")
+            if not prompt:
+                continue
+            if m.get("by") and m["by"] != "user":
+                prompt = f"({m['by']}からの指示) {prompt}"
+            for agent in self.agents:
+                if m.get("to") in ("all", agent.role):
+                    agent.instruct(prompt)
+
     def loop(self, t: term.Term) -> None:
         while True:
+            self._dispatch_control()
             # terminal bell when an agent newly needs attention
             for agent in self.agents:
                 if agent.attention and agent.role not in self._belled:

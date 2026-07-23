@@ -217,6 +217,35 @@ def messages(home: Path, role: str | None = None, limit: int = 20) -> list[dict]
     return out[-limit:]
 
 
+def tell(home: Path, to: str, prompt: str) -> dict:
+    """External control (the tmux send-keys lesson): queue an instruction
+    for a role's agent; the cockpit dispatches it on its next tick."""
+    msg = {"ts": _now(), "by": whoami(), "to": to, "prompt": prompt}
+    with locked(home):
+        with open(bus_dir(home) / "control.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    return msg
+
+
+def drain_control(home: Path) -> list[dict]:
+    """New control messages since the last drain (cursor-tracked)."""
+    f = bus_dir(home) / "control.jsonl"
+    cursor = bus_dir(home) / "control.cursor"
+    with locked(home):
+        if not f.exists():
+            return []
+        lines = [ln for ln in f.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        seen = int(cursor.read_text(encoding="utf-8")) if cursor.exists() else 0
+        cursor.write_text(str(len(lines)), encoding="utf-8")
+    out = []
+    for ln in lines[seen:]:
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
 def inbox(home: Path, role: str) -> list[dict]:
     """Unread messages addressed to `role` (or broadcast), cursor-tracked."""
     f = _messages_file(home)

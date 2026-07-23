@@ -228,6 +228,12 @@ def cmd_task(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tell(args: argparse.Namespace) -> int:
+    bus.tell(_home(), args.to, args.text)
+    print(f"→ {args.to} へ指示を送りました (cockpit が次のティックで配達します)")
+    return 0
+
+
 def cmd_say(args: argparse.Namespace) -> int:
     bus.say(_home(), args.to, args.text)
     print(f"→ {args.to}: {args.text}")
@@ -337,6 +343,10 @@ def build_parser() -> argparse.ArgumentParser:
     say.add_argument("to")
     say.add_argument("text")
 
+    tell = sub.add_parser("tell", help="外部からエージェントに指示 (cockpit経由で配達)")
+    tell.add_argument("to", help="役割名 or all")
+    tell.add_argument("text")
+
     inbox = sub.add_parser("inbox", help="read unread messages for your role")
     inbox.add_argument("--role")
 
@@ -371,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
         "up": cmd_up,
         "task": cmd_task,
         "say": cmd_say,
+        "tell": cmd_tell,
         "inbox": cmd_inbox,
         "status": cmd_status,
         "merge": cmd_merge,
