@@ -28,8 +28,9 @@ STATE_BADGE = {
     agentrun.ERROR: ("✖ エラー", RED),
 }
 
-HINTS = " n やること · Enter 指示 · Tab 移動 · b ボード · ? 全キー · q 終了"
-HINTS_INPUT = " Enter 送信 · Esc キャンセル"
+HINT_CHIPS = [("m", "メニュー"), ("n", "やること"), ("Enter", "指示"),
+              ("Tab", "移動"), ("b", "ボード"), ("?", "全キー"), ("q", "終了")]
+HINTS_INPUT = " Enter 送信 · Esc 戻る"
 AUTONOMOUS_FLAG = "--dangerously-skip-permissions"
 NUDGE = "ボードとinboxを再確認し、着手可能なタスクがあれば続けて。なければ待機と報告して。"
 CTA = " ✎ まず n を押して、やってほしいことを書いてください (例: READMEを読みやすくして)"
@@ -37,6 +38,7 @@ CTA = " ✎ まず n を押して、やってほしいことを書いてくだ�
 HELP = """\
  キー一覧  (? か Esc で戻る)
 
+   m        メニューを開く — 全機能を↑↓とEnterだけで使える。迷ったらまず m
    n        やってほしいことを書く (タスクとしてボードに載り、手が空いた役割が拾う)
    Enter    選択中の役割に直接指示する
    Tab / ←→ 役割を選ぶ
@@ -133,7 +135,56 @@ class Cockpit:
         self.scroll: dict[int, int] = {}
         self._belled: set[str] = set()
         self._title = ""
+        self.menu: int | None = None  # selected row of the action menu
         self._load_view()
+
+    # ------------------------------------------------------------ menu
+    # the zellij lesson taken to its end: every action is on screen,
+    # picked with arrows+Enter — nothing to memorize
+
+    def _menu_items(self) -> list[tuple[str, str, callable]]:
+        def start_input(target):
+            def go():
+                self.input_target = target
+            return go
+
+        def toggle(attr):
+            def go():
+                setattr(self, attr, not getattr(self, attr))
+            return go
+
+        def nudge():
+            for a in self.agents:
+                if a.state in (agentrun.WAITING, agentrun.ERROR):
+                    a.instruct(NUDGE)
+
+        def stop_all():
+            for a in self.agents:
+                a.interrupt()
+
+        focused = self.agents[self.focus].role if self.agents else "?"
+        return [
+            ("やってほしいことを書く", "ボードに載り、手が空いた役割が拾う (n)", start_input("task")),
+            (f"{focused} に指示する", "選択中の役割へ直接。Tabで役割を変えられる (Enter)", start_input("agent")),
+            ("役割を追加する", "説明を書くだけでパネルが増える (a)", start_input("role")),
+            ("連絡を送る", "例: all 今日はここまで (s)", start_input("say")),
+            ("タスクボードを見る", "全タスクと連絡の一覧 (b)", toggle("show_board")),
+            ("全員に「続けて」", "待機中・エラーの役割を再稼働 (g)", nudge),
+            ("詳細表示の切替", "ツール実行ログを全文で見る (v)", toggle("verbose")),
+            ("全員の作業を中断", "緊急停止。セッションは残る (K)", stop_all),
+            ("キー一覧", "全ショートカットの説明 (?)", toggle("show_help")),
+        ]
+
+    def _compose_menu(self, w: int, h: int) -> list[str]:
+        items = self._menu_items()
+        self.menu = min(self.menu or 0, len(items) - 1)
+        lines = [BOLD + " メニュー" + RESET + DIM + "  — 覚えるキーはこれだけ: m" + RESET, ""]
+        for i, (label, desc, _) in enumerate(items):
+            cursor = "▶ " if i == self.menu else "  "
+            style = REV if i == self.menu else ""
+            lines.append(style + f" {cursor}{pad_cells(label, 26)}" + RESET + DIM + f" {desc}" + RESET)
+        lines += [""] * max(0, h - 1 - len(lines))
+        return lines[: h - 1] + [REV + pad_cells(" ↑↓ 選ぶ · Enter 実行 · Esc 閉じる", w - 1)]
 
     # ------------------------------------------------- view persistence
     # the KDL-layout lesson: your screen arrangement is part of the
@@ -165,6 +216,8 @@ class Cockpit:
         return [clip_ansi(l, w) for l in self._compose(w, h)]
 
     def _compose(self, w: int, h: int) -> list[str]:
+        if self.menu is not None:
+            return self._compose_menu(w, h)
         if self.show_help:
             lines = HELP.splitlines()
             lines += [""] * max(0, h - 1 - len(lines))
@@ -262,8 +315,11 @@ class Cockpit:
                 board += f" ({doing})"
             board += f" · 完了{counts['done']}   (b で一覧)"
             board = pad_cells(board, w - 1)
-        msgs = bus.messages(self.home, limit=1)
-        msg = f" 連絡: {msgs[-1]['from']}→{msgs[-1]['to']}: {msgs[-1]['text']}" if msgs else ""
+        if self.input_target:
+            msg = HINTS_INPUT  # while typing, show how to finish or back out
+        else:
+            msgs = bus.messages(self.home, limit=1)
+            msg = f" 連絡: {msgs[-1]['from']}→{msgs[-1]['to']}: {msgs[-1]['text']}" if msgs else ""
         if self.input_target:
             label = {
                 "agent": f"{self.agents[self.focus].role} への指示",
@@ -278,11 +334,24 @@ class Cockpit:
         elif self.confirm_quit:
             last = REV + YELLOW + pad_cells(
                 " 作業中の役割がいます — 本当に終了するなら q をもう一度、戻るなら他のキー", w - 1)
-        elif self.autonomous:
-            last = REV + YELLOW + " ⚠AUTO" + RESET + REV + pad_cells(HINTS, w - 7)
         else:
-            last = REV + pad_cells(HINTS, w - 1)
+            last = self._chip_bar(w)
         return [DIM + "─" * (w - 1), board, DIM + pad_cells(msg, w - 1), last]
+
+    def _chip_bar(self, w: int) -> str:
+        """zellij-style key chips: the key stands out, the label explains."""
+        parts = []
+        used = 0
+        if self.autonomous:
+            parts.append(REV + YELLOW + " ⚠AUTO " + RESET)
+            used += 7
+        for key, label in HINT_CHIPS:
+            width = cells(key) + cells(label) + 4
+            if used + width > w - 1:
+                break
+            parts.append(REV + BOLD + f" {key} " + RESET + DIM + f"{label}  " + RESET)
+            used += width
+        return "".join(parts)
 
     def _compose_board(self, w: int, h: int) -> list[str]:
         icon = {"todo": "· ", "doing": CYAN + "▶ ", "done": GREEN + "✔ "}
@@ -375,6 +444,19 @@ class Cockpit:
             elif len(ch) == 1 and ch.isprintable():
                 self.buffer += ch
             return True
+        if self.menu is not None:
+            items = self._menu_items()
+            if ch == term.UP:
+                self.menu = (self.menu - 1) % len(items)
+            elif ch == term.DOWN or ch == "\t":
+                self.menu = (self.menu + 1) % len(items)
+            elif is_enter:
+                action = items[self.menu][2]
+                self.menu = None
+                action()
+            elif ch in ("\x1b", "m", "q"):
+                self.menu = None
+            return True
         if self.confirm_quit:
             self.confirm_quit = False
             return ch != "q"  # q confirms quit; anything else just cancels
@@ -388,7 +470,9 @@ class Cockpit:
                 self.confirm_quit = True
                 return True
             return False
-        if ch == "?":
+        if ch == "m":
+            self.menu = 0
+        elif ch == "?":
             self.show_help = not self.show_help
         elif ch == "b":
             self.show_board = not self.show_board
