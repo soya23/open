@@ -117,24 +117,45 @@ def wizard(root: Path) -> Path | None:
         print("  ✔ 作業場を用意しました\n")
 
     roles = None
-    goal = _ask("このチームで何をしたいですか? (1行で。空Enterでテンプレ選択): ")
-    if goal:
-        print("  役割を設計中…")
-        roles = suggest_roles(goal)
+    goal = ""
+    print("チームの組み方を選んでください:")
+    print("  1) おまかせ — やりたいことを1行書くと AI が役割を設計 (推奨)")
+    for key, (label, troles) in TEMPLATES.items():
+        print(f"  {int(key) + 1}) {label}  ({' / '.join(r['name'] for r in troles)})")
+    print("  5) 自分で書く — 役割を1行ずつ入力")
+    choice = _ask("  [1]: ", "1")
+
+    if choice == "1":
+        goal = _ask("\nやりたいことを1行で: ")
+        if goal:
+            print("  役割を設計中…")
+            roles = suggest_roles(goal)
         if roles:
             print("\n  提案チーム:")
             for r in roles:
                 print(f"    {r['name']:12} {r['prompt']}")
             if _ask("  この構成で始めますか? [Y/n]: ", "y").lower() not in ("y", "yes"):
                 roles = None
-        else:
-            print("  (設計できなかったのでテンプレートから選びます)")
-    if roles is None:
-        print("\nチーム構成を選んでください:")
-        for key, (label, troles) in TEMPLATES.items():
-            print(f"  {key}) {label}  ({' / '.join(r['name'] for r in troles)})")
-        choice = _ask("  [1]: ", "1")
-        roles = TEMPLATES.get(choice, TEMPLATES["1"])[1]
+        if roles is None:
+            print("  (おまかせ開発チームで始めます — 役割は後から a キーで足せます)")
+            roles = TEMPLATES["1"][1]
+    elif choice in ("2", "3", "4"):
+        roles = TEMPLATES[str(int(choice) - 1)][1]
+    elif choice == "5":
+        roles = []
+        print("\n役割を1行ずつ (例: tester テスト担当。壊れ方を探す)。空Enterで完了:")
+        while len(roles) < 6:
+            line = _ask(f"  役割{len(roles) + 1}: ")
+            if not line:
+                break
+            name, _, prompt = line.partition(" ")
+            if not team.valid_role_name(name) or any(r["name"] == name for r in roles):
+                name, prompt = f"mate{len(roles) + 1}", line
+            roles.append({"name": name, "prompt": prompt or "チームの一員として、ボードのタスクを手伝う。"})
+        if not roles:
+            roles = TEMPLATES["1"][1]
+    else:
+        roles = TEMPLATES["1"][1]
 
     print("\nエージェントにどこまで任せますか?")
     print("  1) pair   — ファイル編集と協調コマンドだけ許可 (安全な既定)")

@@ -30,6 +30,15 @@ STATE_BADGE = {
 
 HINT_CHIPS = [("m", "メニュー"), ("n", "やること"), ("Enter", "指示"),
               ("Tab", "移動"), ("b", "ボード"), ("?", "全キー"), ("q", "終了")]
+
+# well-worn role presets: pick one, or write your own at the bottom
+ROLE_PRESETS = [
+    ("tester", "テスト担当", "実際に動かして壊れ方を探し、再現手順つきでタスクを起票する。修正はしない。"),
+    ("reviewer", "レビュー担当", "他の役割のブランチを読み、問題や改善点をタスクとして起票する。自分では修正しない。"),
+    ("docs", "ドキュメント係", "READMEやdocsをコードの現状に合わせて最新に保つ。食い違いはタスクを切る。"),
+    ("cleaner", "整理係", "重複コードや読みにくい箇所を、挙動を変えずに読みやすく整理する。"),
+    ("ideas", "企画係", "ボードと成果を眺め、次にやるべき改善をタスクとして提案する。実装はしない。"),
+]
 HINTS_INPUT = " Enter 送信 · Esc 戻る"
 AUTONOMOUS_FLAG = "--dangerously-skip-permissions"
 NUDGE = "ボードとinboxを再確認し、着手可能なタスクがあれば続けて。なければ待機と報告して。"
@@ -47,7 +56,8 @@ HELP = """\
    < / >    選択中の列の幅を調整 (, と . でも可)
    b        タスクボードを全画面で見る
    s        連絡を送る (例: all 今日はここまで / core 先にテスト書いて)
-   a        役割を追加 (例: tester テスト担当)
+   a        役割を追加 — よく使う役割 (テスト/レビュー/ドキュメント等) から
+            選ぶか、最下段の「自由に書く」で文章から作る
    g        待機中の全員に「続けて」
    v        詳細表示の切替 (ツール実行ログを全文で見る)
    K        全員の作業をいますぐ中断 (緊急停止。セッションは残る)
@@ -140,6 +150,7 @@ class Cockpit:
         self._belled: set[str] = set()
         self._title = ""
         self.menu: int | None = None  # selected row of the action menu
+        self.role_menu: int | None = None  # selected row of the role picker
         self.overlay: list[str] | None = None  # transient result screen
         self._flash: tuple[str, float] | None = None
         self.history: dict[str, list[str]] = {}
@@ -182,7 +193,7 @@ class Cockpit:
         return [
             ("やってほしいことを書く", "ボードに載り、手が空いた役割が拾う (n)", start_input("task")),
             (f"{focused} に指示する", "選択中の役割へ直接。Tabで役割を変えられる (Enter)", start_input("agent")),
-            ("役割を追加する", "説明を書くだけでパネルが増える (a)", start_input("role")),
+            ("役割を追加する", "よく使う役割から選ぶか、自由に書く (a)", self._open_role_picker),
             ("連絡を送る", "例: all 今日はここまで (s)", start_input("say")),
             ("タスクボードを見る", "全タスクと連絡の一覧 (b)", toggle("show_board")),
             ("全員に「続けて」", "待機中・エラーの役割を再稼働 (g)", nudge),
@@ -191,6 +202,21 @@ class Cockpit:
             ("成果を回収する (merge)", "全役割のブランチを取り込む。安全確認つき", self._do_merge),
             ("キー一覧", "全ショートカットの説明 (?)", toggle("show_help")),
         ]
+
+    def _open_role_picker(self) -> None:
+        self.role_menu = 0
+
+    def _compose_role_menu(self, w: int, h: int) -> list[str]:
+        rows = [(label, desc) for _, label, desc in ROLE_PRESETS]
+        rows.append(("自由に書く", "やってほしいことを文章で (名前は自動で付く)"))
+        self.role_menu = min(self.role_menu or 0, len(rows) - 1)
+        lines = [BOLD + " 役割を追加" + RESET + DIM + "  — よく使うものは選ぶだけ" + RESET, ""]
+        for i, (label, desc) in enumerate(rows):
+            cursor = "▶ " if i == self.role_menu else "  "
+            style = REV if i == self.role_menu else ""
+            lines.append(style + f" {cursor}{pad_cells(label, 16)}" + RESET + DIM + f" {desc}" + RESET)
+        lines += [""] * max(0, h - 1 - len(lines))
+        return lines[: h - 1] + [REV + pad_cells(" ↑↓ 選ぶ · Enter 追加 · Esc 閉じる", w - 1)]
 
     def _do_merge(self) -> None:
         try:
@@ -248,6 +274,8 @@ class Cockpit:
             lines = list(self.overlay)
             lines += [""] * max(0, h - len(lines))
             return lines[:h]
+        if self.role_menu is not None:
+            return self._compose_role_menu(w, h)
         if self.menu is not None:
             return self._compose_menu(w, h)
         if self.show_help:
@@ -443,16 +471,23 @@ class Cockpit:
         elif target == "role":
             self._add_role(text)
 
+    def _unique_name(self, base: str) -> str:
+        taken = {a.role for a in self.agents}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base}{n}" in taken:
+            n += 1
+        return f"{base}{n}"
+
     def _add_role(self, text: str) -> None:
         name, _, prompt = text.partition(" ")
-        taken = {a.role for a in self.agents}
-        if not team.valid_role_name(name) or name in taken:
+        if not team.valid_role_name(name):
             # description-only input: name the panel automatically
-            prompt = text
-            n = 2
-            while f"mate{n}" in taken:
-                n += 1
-            name = f"mate{n}"
+            name, prompt = "mate", text
+        self._create_role(self._unique_name(name), prompt)
+
+    def _create_role(self, name: str, prompt: str) -> None:
         role = {"name": name, "prompt": prompt or "チームの一員として、ボードのタスクを手伝う。"}
         try:
             team.append_role(self.root, role)
@@ -502,6 +537,23 @@ class Cockpit:
                 self.buffer = self.buffer[:-1]
             elif len(ch) == 1 and ch.isprintable():
                 self.buffer += ch
+            return True
+        if self.role_menu is not None:
+            total = len(ROLE_PRESETS) + 1
+            if ch == term.UP:
+                self.role_menu = (self.role_menu - 1) % total
+            elif ch == term.DOWN or ch == "\t":
+                self.role_menu = (self.role_menu + 1) % total
+            elif is_enter:
+                idx = self.role_menu
+                self.role_menu = None
+                if idx < len(ROLE_PRESETS):
+                    base, _, prompt = ROLE_PRESETS[idx]
+                    self._create_role(self._unique_name(base), prompt)
+                else:
+                    self.input_target = "role"
+            elif ch in ("\x1b", "a", "q"):
+                self.role_menu = None
             return True
         if self.menu is not None:
             items = self._menu_items()
@@ -567,7 +619,7 @@ class Cockpit:
         elif ch == "s":
             self.input_target = "say"
         elif ch == "a":
-            self.input_target = "role"
+            self.role_menu = 0
         elif ch == "K":
             for agent in self.agents:
                 agent.interrupt()
