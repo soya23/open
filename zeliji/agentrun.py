@@ -13,6 +13,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -75,6 +76,7 @@ class Agent(threading.Thread):
         self.events: deque[tuple[str, str]] = deque(maxlen=200)
         self.prompts: queue.Queue[str | None] = queue.Queue()
         self.attention = False  # turn finished and nobody has looked yet
+        self.state_since = time.time()
         self._interrupted = False
         self.proc: subprocess.Popen | None = None
         agents_dir = home / "agents"
@@ -138,6 +140,7 @@ class Agent(threading.Thread):
 
     def _turn(self, prompt: str, _retry: bool = False) -> None:
         self.state = RUNNING
+        self.state_since = time.time()
         if not _retry:
             self.events.append(("you", prompt))
         used_resume = self.session_id is not None
@@ -191,6 +194,7 @@ class Agent(threading.Thread):
             self.events.append(("error", f"claude exited with {code}"))
         else:
             self.state = WAITING
+        self.state_since = time.time()
         self.attention = True
 
     def _handle(self, obj: dict) -> None:

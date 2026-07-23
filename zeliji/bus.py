@@ -68,7 +68,7 @@ def find_home(start: Path | None = None) -> Path:
         if cand.is_dir():
             return cand
     raise BusError(
-        "no .zeliji directory found — run `zeliji init` in your repo first"
+        ".zeliji が見つかりません — リポジトリで `zeliji init` (または `zeliji`) を実行してください"
     )
 
 
@@ -131,7 +131,7 @@ def task_add(
         ids = {t["id"] for t in tasks}
         for dep in after or []:
             if dep not in ids:
-                raise BusError(f"--after {dep}: no such task")
+                raise BusError(f"--after {dep}: そのタスクはありません")
         task = {
             "id": 1 + max(ids, default=0),
             "title": title,
@@ -167,14 +167,14 @@ def _set_status(home: Path, task_id: int, status: str, role: str | None) -> dict
             if t["id"] == task_id:
                 if status == "doing" and t["status"] == "doing" and t["role"] not in (None, role):
                     raise BusError(
-                        f"task #{task_id} is already claimed by '{t['role']}'"
+                        f"タスク #{task_id} は '{t['role']}' が着手済みです"
                     )
                 if status == "doing":
                     blocked = blocked_by(t, tasks)
                     if blocked:
                         deps = ", ".join(f"#{d}" for d in blocked)
                         raise BusError(
-                            f"task #{task_id} is blocked by unfinished {deps}"
+                            f"タスク #{task_id} は未完了の {deps} にブロックされています"
                         )
                 t["status"] = status
                 if role:
@@ -182,7 +182,7 @@ def _set_status(home: Path, task_id: int, status: str, role: str | None) -> dict
                 t["updated"] = _now()
                 _save_tasks(home, tasks)
                 return t
-    raise BusError(f"no task with id {task_id}")
+    raise BusError(f"タスク #{task_id} は存在しません")
 
 
 def task_claim(home: Path, task_id: int, role: str | None = None) -> dict:

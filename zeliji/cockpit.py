@@ -91,6 +91,28 @@ def pad_cells(text: str, width: int) -> str:
     return text + " " * (width - cells(text))
 
 
+_ANSI = __import__("re").compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def clip_ansi(line: str, width: int) -> str:
+    """Hard guarantee: a styled line never exceeds `width` cells."""
+    out, cw, i = [], 0, 0
+    while i < len(line):
+        m = _ANSI.match(line, i)
+        if m:
+            out.append(m.group())
+            i = m.end()
+            continue
+        ch = line[i]
+        w = _cell_width(ch)
+        if cw + w > width:
+            break
+        out.append(ch)
+        cw += w
+        i += 1
+    return "".join(out)
+
+
 class Cockpit:
     def __init__(self, cfg: dict, home: Path, root: Path, agents: list[agentrun.Agent]):
         self.cfg = cfg
@@ -113,6 +135,9 @@ class Cockpit:
     # ------------------------------------------------------------ frame
 
     def compose(self, w: int, h: int) -> list[str]:
+        return [clip_ansi(l, w) for l in self._compose(w, h)]
+
+    def _compose(self, w: int, h: int) -> list[str]:
         if self.show_help:
             lines = HELP.splitlines()
             lines += [""] * max(0, h - 1 - len(lines))
@@ -121,6 +146,8 @@ class Cockpit:
             return self._compose_board(w, h)
 
         idxs = [self.zoom] if self.zoom is not None else list(range(len(self.agents)))
+        if len(idxs) * 13 - 3 > w:  # too narrow for all columns: show focus only
+            idxs = [self.focus]
         inners = self._widths(w, idxs)
         body_h = max(3, h - 5)
 
@@ -143,10 +170,13 @@ class Cockpit:
         return lines
 
     def _widths(self, w: int, idxs: list[int]) -> list[int]:
-        avail = max(10 * len(idxs), w - 3 * (len(idxs) - 1) - 1)
+        avail = max(len(idxs) * 10, w - 3 * (len(idxs) - 1) - 1)
         total = sum(self.weights[i] for i in idxs)
         inners = [max(10, int(avail * self.weights[i] / total)) for i in idxs]
-        inners[-1] = max(10, inners[-1] + (avail - sum(inners)))
+        # min-width floors can push the sum past avail — shave the widest
+        while sum(inners) > avail and max(inners) > 10:
+            inners[inners.index(max(inners))] -= 1
+        inners[inners.index(max(inners))] += avail - sum(inners)
         return inners
 
     def _rows(self, agent: agentrun.Agent, inner: int) -> list[tuple[str, str]]:
@@ -178,6 +208,9 @@ class Cockpit:
         for i, inner in zip(idxs, inners):
             agent = self.agents[i]
             badge, color = STATE_BADGE[agent.state]
+            elapsed = int(time.time() - agent.state_since)
+            if agent.state == agentrun.RUNNING:
+                badge += f" {elapsed}秒" if elapsed < 60 else f" {elapsed // 60}分"
             mark = " !" if agent.attention and i != self.focus else ""
             mark += " ▲" if self.scroll.get(i, 0) else ""
             if self.zoom is not None:
@@ -359,7 +392,7 @@ class Cockpit:
                 agent.interrupt()
         elif ch == "g":
             for agent in self.agents:
-                if agent.state == agentrun.WAITING:
+                if agent.state in (agentrun.WAITING, agentrun.ERROR):
                     agent.instruct(NUDGE)
         return True
 

@@ -82,7 +82,7 @@ def valid_role_name(name: str) -> bool:
 def load_config(root: Path) -> dict:
     f = root / CONFIG_NAME
     if not f.exists():
-        raise TeamError(f"{CONFIG_NAME} not found in {root} — run `zeliji init`")
+        raise TeamError(f"{root} に {CONFIG_NAME} がありません — `zeliji` で作成できます")
     # utf-8-sig: Windows Notepad may save with a BOM, which tomllib rejects
     cfg = tomllib.loads(f.read_text(encoding="utf-8-sig"))
     roles = cfg.get("role", [])
@@ -228,10 +228,10 @@ def merge_roles(
     current = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if current != base:
         raise TeamError(
-            f"main checkout is on '{current}' — `git checkout {base}` first"
+            f"本体が '{current}' ブランチにいます — 先に `git checkout {base}`"
         )
     if _git(root, "status", "--porcelain", "--untracked-files=no"):
-        raise TeamError("main checkout has uncommitted changes — commit or stash first")
+        raise TeamError("本体に未コミットの変更があります — 先にコミットかstashを")
 
     home = root / bus.DIR_NAME
     report = []
@@ -246,25 +246,25 @@ def merge_roles(
                 ).splitlines()
                 if merged:
                     _remove_role(root, wt, branch)
-                    report.append(f"{role}: already merged — removed worktree and branch")
+                    report.append(f"{role}: マージ済み — 作業場とブランチを片付けました")
                     continue
-            report.append(f"{role}: nothing to merge")
+            report.append(f"{role}: マージするものなし")
             continue
         if wt.is_dir() and _git(wt, "status", "--porcelain", "--untracked-files=no"):
             raise TeamError(
-                f"{role}: worktree has uncommitted changes — commit there first"
+                f"{role}: 作業場に未コミットの変更があります — 先にコミットを"
             )
         try:
             _git(root, "merge", "--no-ff", branch, "-m", f"merge {branch} ({commits} commits)")
         except TeamError as e:
             _git(root, "merge", "--abort")
             raise TeamError(
-                f"{role}: merge conflict — resolve manually with `git merge {branch}`"
+                f"{role}: コンフリクト — `git merge {branch}` で手動解決してください"
             ) from e
-        report.append(f"{role}: merged {commits} commit(s), {files} file(s)")
+        report.append(f"{role}: {commits}コミット · {files}ファイルをマージ")
         if cleanup:
             _remove_role(root, wt, branch)
-            report.append(f"{role}: removed worktree and branch")
+            report.append(f"{role}: 作業場とブランチを片付けました")
     return report
 
 

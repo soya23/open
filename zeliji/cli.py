@@ -23,17 +23,17 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     cfg = root / team.CONFIG_NAME
     if cfg.exists():
-        print(f"{team.CONFIG_NAME} already exists — edit it to define your roles")
+        print(f"{team.CONFIG_NAME} は既にあります — 役割を編集してください")
     else:
         cfg.write_text(team.SAMPLE_CONFIG, encoding="utf-8")
-        print(f"wrote {team.CONFIG_NAME} — edit the roles, then run `zeliji up`")
+        print(f"{team.CONFIG_NAME} を作成しました — 役割を編集して `zeliji up`")
     (root / bus.DIR_NAME).mkdir(exist_ok=True)
     gitignore = root / ".gitignore"
     lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
     if bus.DIR_NAME + "/" not in lines:
         gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n", encoding="utf-8")
-        print("added .zeliji/ to .gitignore")
-    print("next: edit zeliji.toml, commit it with .gitignore, then `zeliji up`")
+        print(".gitignore に .zeliji/ を追加しました")
+    print("次: zeliji.toml を編集し、.gitignore と一緒にコミットしてから `zeliji up`")
     return 0
 
 
@@ -127,7 +127,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     for role in cfg["role"]:
         wt = team.ensure_worktree(root, home, role["name"], cfg)
         team.write_charter(home, role)
-        print(f"role {role['name']}: worktree {wt} (branch {team.branch_for(role['name'])})")
+        print(f"役割 {role['name']}: 作業場 {wt} (ブランチ {team.branch_for(role['name'])})")
 
     if args.zellij:
         kdl = layout.write(cfg, home)
@@ -141,10 +141,10 @@ def cmd_up(args: argparse.Namespace) -> int:
         os.execvp("zellij", ["zellij", "--layout", str(kdl)])
 
     if args.dry_run:
-        print("\nnext: rerun without --dry-run to open the cockpit")
+        print("\n次: --dry-run なしで実行すると cockpit が開きます")
         return 0
     if shutil.which("claude") is None:
-        print("claude CLI not found on PATH — install Claude Code first", file=sys.stderr)
+        print("claude コマンドが見つかりません — 先に Claude Code をインストールしてください", file=sys.stderr)
         return 1
     from . import cockpit
 
@@ -157,13 +157,13 @@ def cmd_task(args: argparse.Namespace) -> int:
     if args.task_cmd == "add":
         t = bus.task_add(home, args.title, args.role, args.after)
         deps = f" (after {', '.join(f'#{d}' for d in t['after'])})" if t["after"] else ""
-        print(f"added #{t['id']}: {t['title']}" + (f" @{t['role']}" if t["role"] else "") + deps)
-        print(f"next: `zeliji task claim {t['id']}` to start it")
+        print(f"追加 #{t['id']}: {t['title']}" + (f" @{t['role']}" if t["role"] else "") + deps)
+        print(f"次: 着手するなら `zeliji task claim {t['id']}`")
     elif args.task_cmd == "list":
         tasks = bus.task_list(home)
         shown = [t for t in tasks if not args.status or t["status"] == args.status]
         if not shown:
-            print('(empty — `zeliji task add "..."` to file work)')
+            print('(タスクなし — `zeliji task add "..."` で起票)')
         for t in shown:
             who = f" @{t['role']}" if t.get("role") else ""
             blocked = bus.blocked_by(t, tasks)
@@ -171,10 +171,10 @@ def cmd_task(args: argparse.Namespace) -> int:
             print(f"[{t['status']:5}] #{t['id']} {t['title']}{who}{mark}")
     elif args.task_cmd == "claim":
         t = bus.task_claim(home, args.id, args.role)
-        print(f"claimed #{t['id']} as {t['role']} — `zeliji task done {t['id']}` when finished")
+        print(f"#{t['id']} を {t['role']} が着手 — 終わったら `zeliji task done {t['id']}`")
     elif args.task_cmd == "done":
         t = bus.task_done(home, args.id)
-        print(f"done #{t['id']}: {t['title']}")
+        print(f"完了 #{t['id']}: {t['title']}")
     return 0
 
 
@@ -191,7 +191,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
         return 1
     fresh = bus.inbox(_home(), role)
     if not fresh:
-        print("(no new messages)")
+        print("(新着なし)")
     for m in fresh:
         print(f"{m['ts']} {m['from']} → {m['to']}: {m['text']}")
     return 0
@@ -205,16 +205,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         name = role["name"]
         wt = team.worktree_path(home, name)
         if not wt.is_dir():
-            print(f"{name:12} (no worktree — run `zeliji up`)")
+            print(f"{name:12} (作業場なし — `zeliji up` を実行)")
             continue
         res = subprocess.run(
             ["git", "-C", str(wt), "status", "--porcelain"],
             capture_output=True, encoding="utf-8", errors="replace",
         )
         dirty = len([ln for ln in res.stdout.splitlines() if ln.strip()])
-        state = f"{dirty} uncommitted" if dirty else "clean"
+        state = f"未コミット{dirty}件" if dirty else "クリーン"
         commits, files = team.progress(root, cfg, name)
-        ahead = f"{commits} commit(s), {files} file(s) vs base" if commits else "no commits yet"
+        ahead = f"{commits}コミット · {files}ファイル変更" if commits else "コミットなし"
         print(f"{name:12} {team.branch_for(name):24} {state:14} {ahead}")
     warnings = team.overlap_report(root, cfg)
     if warnings:
@@ -222,9 +222,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         for w in warnings:
             print(w)
     else:
-        print("\nno cross-role file overlaps ✔")
+        print("\n役割間の同一ファイル編集なし ✔")
     if any(team.progress(root, cfg, r["name"])[0] for r in cfg["role"]):
-        print("harvest with `zeliji merge` (add --cleanup to also remove worktrees)")
+        print("`zeliji merge` で回収できます (--cleanup で後片付けも)")
     return 0
 
 
@@ -239,7 +239,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
     known = {r["name"] for r in cfg["role"]}
     unknown = [r for r in roles if r not in known]
     if unknown:
-        print(f"zeliji: unknown role(s): {', '.join(unknown)}", file=sys.stderr)
+        print(f"zeliji: 未定義の役割: {', '.join(unknown)}", file=sys.stderr)
         return 1
     for line in team.merge_roles(root, cfg, roles, cleanup=args.cleanup):
         print(line)
