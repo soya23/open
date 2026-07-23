@@ -10,6 +10,7 @@ padding, so rendering is just printing.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 import unicodedata
@@ -131,6 +132,32 @@ class Cockpit:
         self.weights = [1.0] * len(agents)
         self.scroll: dict[int, int] = {}
         self._belled: set[str] = set()
+        self._title = ""
+        self._load_view()
+
+    # ------------------------------------------------- view persistence
+    # the KDL-layout lesson: your screen arrangement is part of the
+    # environment and should survive a restart
+
+    def _load_view(self) -> None:
+        try:
+            v = json.loads((self.home / "view.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        wmap = v.get("weights", {})
+        self.weights = [float(wmap.get(a.role, 1.0)) for a in self.agents]
+        self.verbose = bool(v.get("verbose", False))
+
+    def save_view(self) -> None:
+        v = {
+            "weights": {a.role: w for a, w in zip(self.agents, self.weights)},
+            "verbose": self.verbose,
+        }
+        try:
+            (self.home / "view.json").write_text(
+                json.dumps(v, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
     # ------------------------------------------------------------ frame
 
@@ -416,9 +443,21 @@ class Cockpit:
                 if m.get("to") in ("all", agent.role):
                     agent.instruct(prompt)
 
+    def _update_title(self) -> None:
+        """Team state in the terminal tab (the zellij-emotitle lesson):
+        visible even while you work in another window."""
+        run = sum(1 for a in self.agents if a.state == agentrun.RUNNING)
+        wait = sum(1 for a in self.agents if a.state == agentrun.WAITING)
+        att = any(a.attention for a in self.agents)
+        title = f"zeliji ●{run} ○{wait}" + (" ❗" if att else "")
+        if title != self._title:
+            self._title = title
+            sys.stdout.write(f"\x1b]0;{title}\x07")
+
     def loop(self, t: term.Term) -> None:
         while True:
             self._dispatch_control()
+            self._update_title()
             # terminal bell when an agent newly needs attention
             for agent in self.agents:
                 if agent.attention and agent.role not in self._belled:
@@ -436,10 +475,13 @@ class Cockpit:
 def run(cfg: dict, home: Path, root: Path) -> None:
     worktrees = {r["name"]: team.worktree_path(home, r["name"]) for r in cfg["role"]}
     agents = agentrun.spawn_team(cfg, home, worktrees)
+    cp = Cockpit(cfg, home, root, agents)
     try:
         with term.Term() as t:
-            Cockpit(cfg, home, root, agents).loop(t)
+            cp.loop(t)
     finally:
+        cp.save_view()
+        sys.stdout.write("\x1b]0;\x07")  # clear the tab title
         for agent in agents:
             agent.stop()
         time.sleep(0.2)
