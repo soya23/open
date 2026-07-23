@@ -67,6 +67,34 @@ def _run(cmd: list[str], cwd: Path) -> None:
     subprocess.run(cmd, cwd=cwd, check=True, capture_output=True)
 
 
+def suggest_roles(goal: str) -> list[dict] | None:
+    """Ask claude to design the team for a stated goal."""
+    claude = shutil.which("claude")
+    if not claude:
+        return None
+    prompt = (
+        "あなたはチーム設計者。次の目的のために2〜4個の役割からなるチームを設計して。\n"
+        f"目的: {goal}\n"
+        "出力は次の形式の行だけを書くこと(説明文・前置き・コードブロック禁止):\n"
+        "name|その役割への日本語の指示(1文)\n"
+        "nameは英小文字とハイフンのみ。例:\n"
+        "builder|実装担当。タスクを実装して動作確認しコミットする。"
+    )
+    try:
+        res = subprocess.run(
+            [claude, "-p", prompt, "--model", "haiku"],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=90,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    roles = []
+    for line in (res.stdout or "").splitlines():
+        name, sep, brief = line.strip().partition("|")
+        if sep and team.valid_role_name(name.strip()) and brief.strip():
+            roles.append({"name": name.strip(), "prompt": brief.strip()})
+    return roles[:4] if len(roles) >= 2 else None
+
+
 def wizard(root: Path) -> Path | None:
     """No-config path for non-engineers: questions in, working team out."""
     print("zeliji セットアップ — 質問に答えるだけで始められます (Ctrl+Cで中止)\n")
@@ -88,11 +116,25 @@ def wizard(root: Path) -> Path | None:
         _run(["git", "commit", "--allow-empty", "-m", "init"], root)
         print("  ✔ 作業場を用意しました\n")
 
-    print("チーム構成を選んでください:")
-    for key, (label, roles) in TEMPLATES.items():
-        print(f"  {key}) {label}  ({' / '.join(r['name'] for r in roles)})")
-    choice = _ask("  [1]: ", "1")
-    roles = TEMPLATES.get(choice, TEMPLATES["1"])[1]
+    roles = None
+    goal = _ask("このチームで何をしたいですか? (1行で。空Enterでテンプレ選択): ")
+    if goal:
+        print("  役割を設計中…")
+        roles = suggest_roles(goal)
+        if roles:
+            print("\n  提案チーム:")
+            for r in roles:
+                print(f"    {r['name']:12} {r['prompt']}")
+            if _ask("  この構成で始めますか? [Y/n]: ", "y").lower() not in ("y", "yes"):
+                roles = None
+        else:
+            print("  (設計できなかったのでテンプレートから選びます)")
+    if roles is None:
+        print("\nチーム構成を選んでください:")
+        for key, (label, troles) in TEMPLATES.items():
+            print(f"  {key}) {label}  ({' / '.join(r['name'] for r in troles)})")
+        choice = _ask("  [1]: ", "1")
+        roles = TEMPLATES.get(choice, TEMPLATES["1"])[1]
 
     print("\nエージェントにどこまで任せますか?")
     print("  1) pair   — ファイル編集と協調コマンドだけ許可 (安全な既定)")
@@ -109,6 +151,11 @@ def wizard(root: Path) -> Path | None:
         gitignore.write_text("\n".join([*lines, bus.DIR_NAME + "/"]) + "\n", encoding="utf-8")
     _run(["git", "add", team.CONFIG_NAME, ".gitignore"], root)
     _run(["git", "commit", "-m", "zeliji setup"], root)
+    if goal:
+        home = root / bus.DIR_NAME
+        home.mkdir(exist_ok=True)
+        bus.task_add(home, goal)
+        print(f"\n  ✎ 目的をボードの最初のタスクにしました: {goal}")
     print(f"\n✔ 設定完了 ({team.CONFIG_NAME} に保存・コミット済み)。cockpitを起動します…\n")
     return root
 
@@ -145,6 +192,9 @@ def cmd_up(args: argparse.Namespace) -> int:
         return 0
     if shutil.which("claude") is None:
         print("claude コマンドが見つかりません — 先に Claude Code をインストールしてください", file=sys.stderr)
+        return 1
+    if not sys.stdin.isatty():
+        print("cockpit は対話ターミナルでのみ起動できます (--dry-run なら可)", file=sys.stderr)
         return 1
     from . import cockpit
 

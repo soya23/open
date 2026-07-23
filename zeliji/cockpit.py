@@ -242,7 +242,7 @@ class Cockpit:
                 "agent": f"{self.agents[self.focus].role} への指示",
                 "task": "やってほしいこと",
                 "say": "宛先+本文 (例: all 進捗どう?)",
-                "role": "役割名+説明 (例: tester テスト担当)",
+                "role": "新しい役割への指示 (説明だけでOK。例: テスト担当として壊れ方を探して)",
             }[self.input_target]
             prompt = f" {label}> {self.buffer}"
             while cells(prompt) > w - 2:
@@ -304,8 +304,14 @@ class Cockpit:
 
     def _add_role(self, text: str) -> None:
         name, _, prompt = text.partition(" ")
-        if not team.valid_role_name(name) or any(a.role == name for a in self.agents):
-            return
+        taken = {a.role for a in self.agents}
+        if not team.valid_role_name(name) or name in taken:
+            # description-only input: name the panel automatically
+            prompt = text
+            n = 2
+            while f"mate{n}" in taken:
+                n += 1
+            name = f"mate{n}"
         role = {"name": name, "prompt": prompt or "チームの一員として、ボードのタスクを手伝う。"}
         try:
             team.append_role(self.root, role)
